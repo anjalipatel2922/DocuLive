@@ -96,7 +96,9 @@ function App() {
               <h2>Documentation History</h2>
             </div>
 
-            <button className="history-button">View all versions</button>
+            <a href="#history" className="history-button">
+  View all versions
+</a>
           </div>
 
           <div className="history-table">
