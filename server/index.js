@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const { Octokit } = require("@octokit/rest");
+const OpenAI = require("openai");
 const express = require("express");
 
 const app = express();
@@ -9,9 +10,20 @@ app.use(express.json());
 
 const PORT = 5000;
 
-// GitHub API connection
+// ================================
+// GITHUB API CONNECTION
+// ================================
+
 const octokit = new Octokit({
     auth: process.env.GITHUB_TOKEN
+});
+
+// ================================
+// OPENAI API CONNECTION
+// ================================
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
 });
 
 // ================================
@@ -21,6 +33,64 @@ const octokit = new Octokit({
 app.get("/", (req, res) => {
     res.send("AI Code Review Backend is running!");
 });
+
+// ================================
+// AI CODE REVIEW FUNCTION
+// ================================
+
+async function reviewCode(codeDiff) {
+    try {
+        console.log("\n========== AI CODE REVIEW ==========");
+
+        const response = await openai.responses.create({
+            model: "gpt-5.6-luna",
+
+            input: [
+                {
+                    role: "system",
+                    content:
+                        "You are an expert software engineer and code reviewer. Review the provided GitHub code diff. Identify bugs, security issues, performance problems, code quality issues, and improvements. Be practical and explain issues clearly."
+                },
+                {
+                    role: "user",
+                    content: `Review the following GitHub code changes:
+
+${codeDiff}
+
+Provide your review in this format:
+
+BUGS:
+- List important bugs or potential bugs.
+
+SECURITY:
+- List security problems, if any.
+
+PERFORMANCE:
+- List performance concerns, if any.
+
+CODE QUALITY:
+- List code quality issues.
+
+SUGGESTIONS:
+- Give practical suggestions for improvement.
+
+SUMMARY:
+- Give a short overall summary.`
+                }
+            ]
+        });
+
+        console.log("\nAI REVIEW RESULT:");
+        console.log(response.output_text);
+
+        console.log("\n====================================\n");
+
+    } catch (error) {
+        console.log("\nOpenAI API error:");
+
+        console.log(error.message);
+    }
+}
 
 // ================================
 // GITHUB WEBHOOK ROUTE
@@ -55,7 +125,7 @@ app.post("/webhook", async (req, res) => {
         console.log("Repository:", repository);
         console.log("Branch:", branch);
 
-        // Process every commit in the push
+        // Process every commit
         for (const commit of commits) {
             console.log("\nWebhook Commit:");
             console.log("Commit SHA:", commit.id);
@@ -65,7 +135,6 @@ app.post("/webhook", async (req, res) => {
             try {
                 // ================================
                 // GET COMPLETE COMMIT INFORMATION
-                // FROM GITHUB API
                 // ================================
 
                 const response = await octokit.repos.getCommit({
@@ -85,29 +154,47 @@ app.post("/webhook", async (req, res) => {
                 console.log("\nChanged Files:");
 
                 if (response.data.files) {
-                    response.data.files.forEach((file) => {
+
+                    for (const file of response.data.files) {
 
                         console.log(
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
                         );
 
                         // ================================
-                        // SHOW ACTUAL CODE DIFF
+                        // CODE DIFF
                         // ================================
 
                         if (file.patch) {
+
                             console.log("\n--- CODE DIFF ---");
                             console.log(file.patch);
                             console.log("--- END CODE DIFF ---\n");
+
+                            // ================================
+                            // SEND CODE TO AI REVIEWER
+                            // ================================
+
+                            await reviewCode(
+                                `File: ${file.filename}
+
+Status: ${file.status}
+
+Changes:
+${file.patch}`
+                            );
+
                         } else {
+
                             console.log(
                                 "No text patch available for this file."
                             );
                         }
-                    });
+                    }
                 }
 
             } catch (error) {
+
                 console.log(
                     "GitHub API error:",
                     error.status,
@@ -130,4 +217,6 @@ app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
 
-// Octokit webhook integration test
+// Octokit + OpenAI integration
+
+// AI code review test
