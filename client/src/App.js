@@ -1,4 +1,5 @@
 import './App.css';
+import DocumentationViewer from './components/DocumentationViewer';
 
 function App() {
   const documentationHistory = [
@@ -88,6 +89,7 @@ function App() {
             <span className="time-text">Last generated today</span>
           </div>
         </section>
+                <DocumentationViewer />
 
         <section className="history-section" id="history">
           <div className="section-heading">
