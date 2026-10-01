@@ -1,3 +1,6 @@
+require("dotenv").config();
+
+const { Octokit } = require("@octokit/rest");
 const express = require("express");
 
 const app = express();
@@ -6,18 +9,21 @@ app.use(express.json());
 
 const PORT = 5000;
 
+const octokit = new Octokit({
+    auth: process.env.GITHUB_TOKEN
+});
+
 // Home route
 app.get("/", (req, res) => {
     res.send("AI Code Review Backend is running!");
 });
 
 // GitHub webhook route
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
     const event = req.headers["x-github-event"];
     const payload = req.body;
 
     console.log("\n========== GITHUB WEBHOOK ==========");
-
     console.log("Event:", event);
 
     // GitHub connection test
@@ -26,32 +32,54 @@ app.post("/webhook", (req, res) => {
         return res.status(200).send("Webhook connected!");
     }
 
-    // Detect code push
+    // Handle GitHub push event
     if (event === "push") {
         const repository = payload.repository?.full_name;
         const branch = payload.ref?.replace("refs/heads/", "");
+        const commits = payload.commits || [];
 
         console.log("Repository:", repository);
         console.log("Branch:", branch);
 
-        // Display commit details
-        if (payload.commits && payload.commits.length > 0) {
-            payload.commits.forEach((commit, index) => {
-                console.log(`\nCommit ${index + 1}`);
+        for (const commit of commits) {
+            console.log("\nWebhook Commit:");
+            console.log("Commit SHA:", commit.id);
+            console.log("Message:", commit.message);
+            console.log("Author:", commit.author?.name);
 
-                console.log("Message:", commit.message);
-                console.log("Author:", commit.author?.name);
+            try {
+                // Fetch complete commit information from GitHub
+                const response = await octokit.repos.getCommit({
+                    owner: payload.repository.owner.login,
+                    repo: payload.repository.name,
+                    ref: commit.id
+                });
 
-                console.log("Added files:", commit.added);
-                console.log("Modified files:", commit.modified);
-                console.log("Removed files:", commit.removed);
-            });
-        } else {
-            console.log("No commit details found.");
+                console.log("\nGitHub API Commit Details:");
+                console.log("Commit SHA:", response.data.sha);
+                console.log("Message:", response.data.commit.message);
+
+                console.log("\nChanged Files:");
+
+                if (response.data.files) {
+                    response.data.files.forEach((file) => {
+                        console.log(
+                            `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
+                        );
+                    });
+                }
+
+            } catch (error) {
+                console.log(
+                    "GitHub API error:",
+                    error.status,
+                    error.message
+                );
+            }
         }
     }
 
-    console.log("====================================\n");
+    console.log("\n====================================\n");
 
     res.status(200).send("Webhook received successfully!");
 });
@@ -59,4 +87,4 @@ app.post("/webhook", (req, res) => {
 // Start server
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
-});
+});     // Octokit webhook integration test
