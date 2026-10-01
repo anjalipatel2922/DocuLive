@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const { Octokit } = require("@octokit/rest");
-const OpenAI = require("openai");
+const { GoogleGenAI } = require("@google/genai");
 const express = require("express");
 
 const app = express();
@@ -19,11 +19,11 @@ const octokit = new Octokit({
 });
 
 // ================================
-// OPENAI API CONNECTION
+// GEMINI API CONNECTION
 // ================================
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY
 });
 
 // ================================
@@ -42,52 +42,50 @@ async function reviewCode(codeDiff) {
     try {
         console.log("\n========== AI CODE REVIEW ==========");
 
-        const response = await openai.responses.create({
-            model: "gpt-5.6-luna",
+        const response = await ai.models.generateContent({
+            model: "gemini-3.8-flash",
 
-            input: [
-                {
-                    role: "system",
-                    content:
-                        "You are an expert software engineer and code reviewer. Review the provided GitHub code diff. Identify bugs, security issues, performance problems, code quality issues, and improvements. Be practical and explain issues clearly."
-                },
-                {
-                    role: "user",
-                    content: `Review the following GitHub code changes:
+            contents: `
+You are an expert software engineer and code reviewer.
+
+Review the following GitHub code change.
 
 ${codeDiff}
 
-Provide your review in this format:
+Analyze the code carefully and provide a practical code review.
+
+Use exactly this format:
 
 BUGS:
-- List important bugs or potential bugs.
+- List bugs or potential bugs.
+- If there are no important bugs, say "No major bugs found."
 
 SECURITY:
-- List security problems, if any.
+- List security problems.
+- If there are no security problems, say "No major security issues found."
 
 PERFORMANCE:
-- List performance concerns, if any.
+- List performance concerns.
+- If there are no important concerns, say "No major performance issues found."
 
 CODE QUALITY:
 - List code quality issues.
 
 SUGGESTIONS:
-- Give practical suggestions for improvement.
+- Give practical improvements.
 
 SUMMARY:
-- Give a short overall summary.`
-                }
-            ]
+- Give a short summary of the review.
+`
         });
 
         console.log("\nAI REVIEW RESULT:");
-        console.log(response.output_text);
+        console.log(response.text);
 
         console.log("\n====================================\n");
 
     } catch (error) {
-        console.log("\nOpenAI API error:");
-
+        console.log("\nGemini API error:");
         console.log(error.message);
     }
 }
@@ -127,12 +125,14 @@ app.post("/webhook", async (req, res) => {
 
         // Process every commit
         for (const commit of commits) {
+
             console.log("\nWebhook Commit:");
             console.log("Commit SHA:", commit.id);
             console.log("Message:", commit.message);
             console.log("Author:", commit.author?.name);
 
             try {
+
                 // ================================
                 // GET COMPLETE COMMIT INFORMATION
                 // ================================
@@ -172,7 +172,7 @@ app.post("/webhook", async (req, res) => {
                             console.log("--- END CODE DIFF ---\n");
 
                             // ================================
-                            // SEND CODE TO AI REVIEWER
+                            // SEND CODE TO GEMINI
                             // ================================
 
                             await reviewCode(
@@ -217,6 +217,4 @@ app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
 
-// Octokit + OpenAI integration
-
-// AI code review test
+// Gemini AI code review integration
