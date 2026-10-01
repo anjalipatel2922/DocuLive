@@ -9,16 +9,23 @@ app.use(express.json());
 
 const PORT = 5000;
 
+// GitHub API connection
 const octokit = new Octokit({
     auth: process.env.GITHUB_TOKEN
 });
 
-// Home route
+// ================================
+// HOME ROUTE
+// ================================
+
 app.get("/", (req, res) => {
     res.send("AI Code Review Backend is running!");
 });
 
-// GitHub webhook route
+// ================================
+// GITHUB WEBHOOK ROUTE
+// ================================
+
 app.post("/webhook", async (req, res) => {
     const event = req.headers["x-github-event"];
     const payload = req.body;
@@ -26,13 +33,20 @@ app.post("/webhook", async (req, res) => {
     console.log("\n========== GITHUB WEBHOOK ==========");
     console.log("Event:", event);
 
-    // GitHub connection test
+    // ================================
+    // GITHUB PING EVENT
+    // ================================
+
     if (event === "ping") {
         console.log("GitHub webhook connected successfully!");
+
         return res.status(200).send("Webhook connected!");
     }
 
-    // Handle GitHub push event
+    // ================================
+    // GITHUB PUSH EVENT
+    // ================================
+
     if (event === "push") {
         const repository = payload.repository?.full_name;
         const branch = payload.ref?.replace("refs/heads/", "");
@@ -41,6 +55,7 @@ app.post("/webhook", async (req, res) => {
         console.log("Repository:", repository);
         console.log("Branch:", branch);
 
+        // Process every commit in the push
         for (const commit of commits) {
             console.log("\nWebhook Commit:");
             console.log("Commit SHA:", commit.id);
@@ -48,7 +63,11 @@ app.post("/webhook", async (req, res) => {
             console.log("Author:", commit.author?.name);
 
             try {
-                // Fetch complete commit information from GitHub
+                // ================================
+                // GET COMPLETE COMMIT INFORMATION
+                // FROM GITHUB API
+                // ================================
+
                 const response = await octokit.repos.getCommit({
                     owner: payload.repository.owner.login,
                     repo: payload.repository.name,
@@ -59,13 +78,32 @@ app.post("/webhook", async (req, res) => {
                 console.log("Commit SHA:", response.data.sha);
                 console.log("Message:", response.data.commit.message);
 
+                // ================================
+                // CHANGED FILES
+                // ================================
+
                 console.log("\nChanged Files:");
 
                 if (response.data.files) {
                     response.data.files.forEach((file) => {
+
                         console.log(
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
                         );
+
+                        // ================================
+                        // SHOW ACTUAL CODE DIFF
+                        // ================================
+
+                        if (file.patch) {
+                            console.log("\n--- CODE DIFF ---");
+                            console.log(file.patch);
+                            console.log("--- END CODE DIFF ---\n");
+                        } else {
+                            console.log(
+                                "No text patch available for this file."
+                            );
+                        }
                     });
                 }
 
@@ -84,7 +122,12 @@ app.post("/webhook", async (req, res) => {
     res.status(200).send("Webhook received successfully!");
 });
 
-// Start server
+// ================================
+// START SERVER
+// ================================
+
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
-});     // Octokit webhook integration test
+});
+
+// Octokit webhook integration test
