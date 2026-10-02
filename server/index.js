@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const { generateDocumentation } = require("./documentationClient");
 const { Octokit } = require("@octokit/rest");
 const { GoogleGenAI } = require("@google/genai");
 const express = require("express");
@@ -174,20 +174,30 @@ app.post("/webhook", async (req, res) => {
                             // ================================
                             // SEND CODE TO GEMINI
                             // ================================
-
-                            await reviewCode(
-                                `File: ${file.filename}
+                            const codeDiff = `File: ${file.filename}
 
 Status: ${file.status}
 
 Changes:
-${file.patch}`
-                            );
+${file.patch}`;
 
-                        } else {
+// Send code to Gemini for review
+await reviewCode(codeDiff);
 
-                            console.log(
-                                "No text patch available for this file."
+// Generate documentation using the DocuLive AI engine
+try {
+    const documentation = await generateDocumentation(codeDiff);
+
+    console.log("\n========== AI DOCUMENTATION ==========");
+    console.log("Summary:", documentation.summary);
+    console.log("Documentation:", documentation.documentation);
+    console.log("======================================\n");
+} catch (error) {
+    console.error("Documentation generation failed:", error.message);
+}
+
+ } else {console.log(
+                     "No text patch available for this file."
                             );
                         }
                     }
