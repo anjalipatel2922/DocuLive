@@ -1,7 +1,6 @@
 require("dotenv").config();
 
 const { Octokit } = require("@octokit/rest");
-const { GoogleGenAI } = require("@google/genai");
 const express = require("express");
 
 const app = express();
@@ -19,14 +18,6 @@ const octokit = new Octokit({
 });
 
 // ================================
-// GEMINI API CONNECTION
-// ================================
-
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
-});
-
-// ================================
 // HOME ROUTE
 // ================================
 
@@ -35,17 +26,33 @@ app.get("/", (req, res) => {
 });
 
 // ================================
-// AI CODE REVIEW FUNCTION
+// OPENROUTER AI CODE REVIEW
 // ================================
 
 async function reviewCode(codeDiff) {
     try {
         console.log("\n========== AI CODE REVIEW ==========");
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.8-flash",
+        const response = await fetch(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+                method: "POST",
 
-            contents: `
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    "HTTP-Referer": "http://localhost:5000",
+                    "X-Title": "DocuLive AI Code Review"
+                },
+
+                body: JSON.stringify({
+                    model: "openrouter/free",
+
+                    messages: [
+                        {
+                            role: "user",
+
+                            content: `
 You are an expert software engineer and code reviewer.
 
 Review the following GitHub code change.
@@ -77,16 +84,35 @@ SUGGESTIONS:
 SUMMARY:
 - Give a short summary of the review.
 `
-        });
+                        }
+                    ]
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                data.error?.message ||
+                `OpenRouter HTTP ${response.status}`
+            );
+        }
 
         console.log("\nAI REVIEW RESULT:");
-        console.log(response.text);
+
+        console.log(
+            data.choices?.[0]?.message?.content ||
+            "No review returned."
+        );
 
         console.log("\n====================================\n");
 
     } catch (error) {
-        console.log("\nGemini API error:");
+
+        console.log("\nOpenRouter API error:");
         console.log(error.message);
+
     }
 }
 
@@ -95,6 +121,7 @@ SUMMARY:
 // ================================
 
 app.post("/webhook", async (req, res) => {
+
     const event = req.headers["x-github-event"];
     const payload = req.body;
 
@@ -106,6 +133,7 @@ app.post("/webhook", async (req, res) => {
     // ================================
 
     if (event === "ping") {
+
         console.log("GitHub webhook connected successfully!");
 
         return res.status(200).send("Webhook connected!");
@@ -116,6 +144,7 @@ app.post("/webhook", async (req, res) => {
     // ================================
 
     if (event === "push") {
+
         const repository = payload.repository?.full_name;
         const branch = payload.ref?.replace("refs/heads/", "");
         const commits = payload.commits || [];
@@ -123,7 +152,10 @@ app.post("/webhook", async (req, res) => {
         console.log("Repository:", repository);
         console.log("Branch:", branch);
 
-        // Process every commit
+        // ================================
+        // PROCESS EVERY COMMIT
+        // ================================
+
         for (const commit of commits) {
 
             console.log("\nWebhook Commit:");
@@ -138,14 +170,25 @@ app.post("/webhook", async (req, res) => {
                 // ================================
 
                 const response = await octokit.repos.getCommit({
+
                     owner: payload.repository.owner.login,
+
                     repo: payload.repository.name,
+
                     ref: commit.id
                 });
 
                 console.log("\nGitHub API Commit Details:");
-                console.log("Commit SHA:", response.data.sha);
-                console.log("Message:", response.data.commit.message);
+
+                console.log(
+                    "Commit SHA:",
+                    response.data.sha
+                );
+
+                console.log(
+                    "Message:",
+                    response.data.commit.message
+                );
 
                 // ================================
                 // CHANGED FILES
@@ -168,11 +211,15 @@ app.post("/webhook", async (req, res) => {
                         if (file.patch) {
 
                             console.log("\n--- CODE DIFF ---");
+
                             console.log(file.patch);
-                            console.log("--- END CODE DIFF ---\n");
+
+                            console.log(
+                                "--- END CODE DIFF ---\n"
+                            );
 
                             // ================================
-                            // SEND CODE TO GEMINI
+                            // SEND CODE TO OPENROUTER
                             // ================================
 
                             await reviewCode(
@@ -206,7 +253,9 @@ ${file.patch}`
 
     console.log("\n====================================\n");
 
-    res.status(200).send("Webhook received successfully!");
+    res.status(200).send(
+        "Webhook received successfully!"
+    );
 });
 
 // ================================
@@ -214,7 +263,9 @@ ${file.patch}`
 // ================================
 
 app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-});
 
-// Gemini AI code review integration
+    console.log(
+        `Server running at http://localhost:${PORT}`
+    );
+
+});
