@@ -2,35 +2,61 @@ require("dotenv").config();
 
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
+const cors = require("cors");
 
 const app = express();
 
+app.use(cors());
 app.use(express.json());
 
 const PORT = 5000;
 
-// ================================
+// ==================================================
+// STORE AI REVIEWS
+// ==================================================
+
+// Stores reviews while the server is running.
+// This will be replaced by a database later if needed.
+let reviews = [];
+
+// ==================================================
 // GITHUB API CONNECTION
-// ================================
+// ==================================================
 
 const octokit = new Octokit({
     auth: process.env.GITHUB_TOKEN
 });
 
-// ================================
+// ==================================================
 // HOME ROUTE
-// ================================
+// ==================================================
 
 app.get("/", (req, res) => {
     res.send("AI Code Review Backend is running successfully!");
 });
 
-// ================================
-// OPENROUTER AI CODE REVIEW
-// ================================
+// ==================================================
+// GET AI REVIEWS
+// ==================================================
 
-async function reviewCode(codeDiff) {
+app.get("/api/reviews", (req, res) => {
+
+    res.status(200).json({
+        success: true,
+        count: reviews.length,
+        reviews: reviews
+    });
+
+});
+
+// ==================================================
+// OPENROUTER AI CODE REVIEW
+// ==================================================
+
+async function reviewCode(codeDiff, commitInfo) {
+
     try {
+
         console.log("\n========== AI CODE REVIEW ==========");
 
         const response = await fetch(
@@ -46,6 +72,7 @@ async function reviewCode(codeDiff) {
                 },
 
                 body: JSON.stringify({
+
                     model: "openrouter/free",
 
                     messages: [
@@ -93,76 +120,107 @@ SUMMARY:
         const data = await response.json();
 
         if (!response.ok) {
+
             throw new Error(
                 data.error?.message ||
                 `OpenRouter HTTP ${response.status}`
             );
         }
 
+        const review =
+            data.choices?.[0]?.message?.content ||
+            "No review returned.";
+
         console.log("\nAI REVIEW RESULT:");
 
-        console.log(
-            data.choices?.[0]?.message?.content ||
-            "No review returned."
-        );
+        console.log(review);
 
         console.log("\n====================================\n");
+
+        // ==================================================
+        // SAVE REVIEW
+        // ==================================================
+
+        const reviewData = {
+            id: Date.now(),
+
+            repository: commitInfo.repository,
+
+            branch: commitInfo.branch,
+
+            commitSha: commitInfo.commitSha,
+
+            commitMessage: commitInfo.commitMessage,
+
+            author: commitInfo.author,
+
+            file: commitInfo.file,
+
+            status: commitInfo.status,
+
+            additions: commitInfo.additions,
+
+            deletions: commitInfo.deletions,
+
+            review: review,
+
+            createdAt: new Date().toISOString()
+        };
+
+        reviews.unshift(reviewData);
+
+        // Keep only latest 20 reviews
+        reviews = reviews.slice(0, 20);
+
+        console.log("AI review saved successfully.");
+
+        return reviewData;
 
     } catch (error) {
 
         console.log("\nOpenRouter API error:");
+
         console.log(error.message);
 
+        return null;
     }
 }
 
-// ================================
-// GITHUB WEBHOOK ROUTE
-// ================================
+// ==================================================
+// PROCESS GITHUB PUSH
+// ==================================================
 
-app.post("/webhook", async (req, res) => {
+async function processPush(payload) {
 
-    const event = req.headers["x-github-event"];
-    const payload = req.body;
+    try {
 
-    console.log("\n========== GITHUB WEBHOOK ==========");
-    console.log("Event:", event);
+        const repository =
+            payload.repository?.full_name;
 
-    // ================================
-    // GITHUB PING EVENT
-    // ================================
+        const branch =
+            payload.ref?.replace(
+                "refs/heads/",
+                ""
+            );
 
-    if (event === "ping") {
+        const commits =
+            payload.commits || [];
+
+        console.log("\n========== PROCESSING PUSH ==========");
 
         console.log(
-            "GitHub webhook connected successfully!"
+            "Repository:",
+            repository
         );
 
-        return res.status(200).send(
-            "Webhook connected!"
-        );
-    }
-
-    // ================================
-    // GITHUB PUSH EVENT
-    // ================================
-
-    if (event === "push") {
-
-        const repository = payload.repository?.full_name;
-        const branch = payload.ref?.replace(
-            "refs/heads/",
-            ""
+        console.log(
+            "Branch:",
+            branch
         );
 
-        const commits = payload.commits || [];
-
-        console.log("Repository:", repository);
-        console.log("Branch:", branch);
-
-        // ================================
+        // ==================================================
         // PROCESS EVERY COMMIT
-        // ================================
+        // ==================================================
 
         for (const commit of commits) {
 
@@ -185,9 +243,9 @@ app.post("/webhook", async (req, res) => {
 
             try {
 
-                // ================================
+                // ==================================================
                 // GET COMPLETE COMMIT INFORMATION
-                // ================================
+                // ==================================================
 
                 const response =
                     await octokit.repos.getCommit({
@@ -198,7 +256,9 @@ app.post("/webhook", async (req, res) => {
                         repo:
                             payload.repository.name,
 
-                        ref: commit.id
+                        ref:
+                            commit.id
+
                     });
 
                 console.log(
@@ -215,9 +275,9 @@ app.post("/webhook", async (req, res) => {
                     response.data.commit.message
                 );
 
-                // ================================
+                // ==================================================
                 // CHANGED FILES
-                // ================================
+                // ==================================================
 
                 console.log("\nChanged Files:");
 
@@ -231,9 +291,9 @@ app.post("/webhook", async (req, res) => {
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
                         );
 
-                        // ================================
+                        // ==================================================
                         // CODE DIFF
-                        // ================================
+                        // ==================================================
 
                         if (file.patch) {
 
@@ -241,23 +301,56 @@ app.post("/webhook", async (req, res) => {
                                 "\n--- CODE DIFF ---"
                             );
 
-                            console.log(file.patch);
+                            console.log(
+                                file.patch
+                            );
 
                             console.log(
                                 "--- END CODE DIFF ---\n"
                             );
 
-                            // ================================
+                            // ==================================================
                             // SEND CODE TO OPENROUTER
-                            // ================================
+                            // ==================================================
 
                             await reviewCode(
+
                                 `File: ${file.filename}
 
 Status: ${file.status}
 
 Changes:
-${file.patch}`
+${file.patch}`,
+
+                                {
+                                    repository:
+                                        repository,
+
+                                    branch:
+                                        branch,
+
+                                    commitSha:
+                                        commit.id,
+
+                                    commitMessage:
+                                        commit.message,
+
+                                    author:
+                                        commit.author?.name,
+
+                                    file:
+                                        file.filename,
+
+                                    status:
+                                        file.status,
+
+                                    additions:
+                                        file.additions,
+
+                                    deletions:
+                                        file.deletions
+                                }
+
                             );
 
                         } else {
@@ -278,20 +371,102 @@ ${file.patch}`
                 );
             }
         }
+
+        console.log(
+            "\n========== PUSH PROCESSING COMPLETE ==========\n"
+        );
+
+    } catch (error) {
+
+        console.log(
+            "Push processing error:",
+            error.message
+        );
     }
+}
+
+// ==================================================
+// GITHUB WEBHOOK ROUTE
+// ==================================================
+
+app.post("/webhook", (req, res) => {
+
+    const event =
+        req.headers["x-github-event"];
+
+    const payload =
+        req.body;
 
     console.log(
-        "\n====================================\n"
+        "\n========== GITHUB WEBHOOK =========="
     );
 
-    res.status(200).send(
-        "Webhook received successfully!"
+    console.log(
+        "Event:",
+        event
     );
+
+    // ==================================================
+    // GITHUB PING EVENT
+    // ==================================================
+
+    if (event === "ping") {
+
+        console.log(
+            "GitHub webhook connected successfully!"
+        );
+
+        return res
+            .status(200)
+            .send("Webhook connected!");
+    }
+
+    // ==================================================
+    // GITHUB PUSH EVENT
+    // ==================================================
+
+    if (event === "push") {
+
+        // Respond immediately to GitHub.
+        // AI processing continues in background.
+
+        res
+            .status(200)
+            .send("Webhook received successfully!");
+
+        console.log(
+            "Webhook acknowledged by server."
+        );
+
+        console.log(
+            "Starting background AI code review..."
+        );
+
+        processPush(payload).catch((error) => {
+
+            console.log(
+                "Background processing error:",
+                error.message
+            );
+
+        });
+
+        return;
+    }
+
+    // ==================================================
+    // OTHER EVENTS
+    // ==================================================
+
+    res
+        .status(200)
+        .send("Webhook received successfully!");
+
 });
 
-// ================================
+// ==================================================
 // START SERVER
-// ================================
+// ==================================================
 
 app.listen(PORT, () => {
 
