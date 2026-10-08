@@ -22,7 +22,7 @@ const octokit = new Octokit({
 // ================================
 
 app.get("/", (req, res) => {
-    res.send("AI Code Review Backend is running!");
+    res.send("AI Code Review Backend is running successfully!");
 });
 
 // ================================
@@ -134,9 +134,13 @@ app.post("/webhook", async (req, res) => {
 
     if (event === "ping") {
 
-        console.log("GitHub webhook connected successfully!");
+        console.log(
+            "GitHub webhook connected successfully!"
+        );
 
-        return res.status(200).send("Webhook connected!");
+        return res.status(200).send(
+            "Webhook connected!"
+        );
     }
 
     // ================================
@@ -146,7 +150,11 @@ app.post("/webhook", async (req, res) => {
     if (event === "push") {
 
         const repository = payload.repository?.full_name;
-        const branch = payload.ref?.replace("refs/heads/", "");
+        const branch = payload.ref?.replace(
+            "refs/heads/",
+            ""
+        );
+
         const commits = payload.commits || [];
 
         console.log("Repository:", repository);
@@ -159,9 +167,21 @@ app.post("/webhook", async (req, res) => {
         for (const commit of commits) {
 
             console.log("\nWebhook Commit:");
-            console.log("Commit SHA:", commit.id);
-            console.log("Message:", commit.message);
-            console.log("Author:", commit.author?.name);
+
+            console.log(
+                "Commit SHA:",
+                commit.id
+            );
+
+            console.log(
+                "Message:",
+                commit.message
+            );
+
+            console.log(
+                "Author:",
+                commit.author?.name
+            );
 
             try {
 
@@ -169,16 +189,21 @@ app.post("/webhook", async (req, res) => {
                 // GET COMPLETE COMMIT INFORMATION
                 // ================================
 
-                const response = await octokit.repos.getCommit({
+                const response =
+                    await octokit.repos.getCommit({
 
-                    owner: payload.repository.owner.login,
+                        owner:
+                            payload.repository.owner.login,
 
-                    repo: payload.repository.name,
+                        repo:
+                            payload.repository.name,
 
-                    ref: commit.id
-                });
+                        ref: commit.id
+                    });
 
-                console.log("\nGitHub API Commit Details:");
+                console.log(
+                    "\nGitHub API Commit Details:"
+                );
 
                 console.log(
                     "Commit SHA:",
@@ -198,7 +223,9 @@ app.post("/webhook", async (req, res) => {
 
                 if (response.data.files) {
 
-                    for (const file of response.data.files) {
+                    for (
+                        const file of response.data.files
+                    ) {
 
                         console.log(
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
@@ -210,7 +237,9 @@ app.post("/webhook", async (req, res) => {
 
                         if (file.patch) {
 
-                            console.log("\n--- CODE DIFF ---");
+                            console.log(
+                                "\n--- CODE DIFF ---"
+                            );
 
                             console.log(file.patch);
 
@@ -251,7 +280,9 @@ ${file.patch}`
         }
     }
 
-    console.log("\n====================================\n");
+    console.log(
+        "\n====================================\n"
+    );
 
     res.status(200).send(
         "Webhook received successfully!"
