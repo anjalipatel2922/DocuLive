@@ -1,51 +1,85 @@
 require("dotenv").config();
 const { generateDocumentation } = require("./documentationClient");
 const { Octokit } = require("@octokit/rest");
-const { GoogleGenAI } = require("@google/genai");
 const express = require("express");
+const cors = require("cors");
 
 const app = express();
 
+app.use(cors());
 app.use(express.json());
 
 const PORT = 5000;
 
-// ================================
+// ==================================================
+// STORE AI REVIEWS
+// ==================================================
+
+// Stores reviews while the server is running.
+// This will be replaced by a database later if needed.
+let reviews = [];
+
+// ==================================================
 // GITHUB API CONNECTION
-// ================================
+// ==================================================
 
 const octokit = new Octokit({
     auth: process.env.GITHUB_TOKEN
 });
 
-// ================================
-// GEMINI API CONNECTION
-// ================================
-
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
-});
-
-// ================================
+// ==================================================
 // HOME ROUTE
-// ================================
+// ==================================================
 
 app.get("/", (req, res) => {
-    res.send("AI Code Review Backend is running!");
+    res.send("AI Code Review Backend is running successfully!");
 });
 
-// ================================
-// AI CODE REVIEW FUNCTION
-// ================================
+// ==================================================
+// GET AI REVIEWS
+// ==================================================
 
-async function reviewCode(codeDiff) {
+app.get("/api/reviews", (req, res) => {
+
+    res.status(200).json({
+        success: true,
+        count: reviews.length,
+        reviews: reviews
+    });
+
+});
+
+// ==================================================
+// OPENROUTER AI CODE REVIEW
+// ==================================================
+
+async function reviewCode(codeDiff, commitInfo) {
+
     try {
+
         console.log("\n========== AI CODE REVIEW ==========");
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.8-flash",
+        const response = await fetch(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+                method: "POST",
 
-            contents: `
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    "HTTP-Referer": "http://localhost:5000",
+                    "X-Title": "DocuLive AI Code Review"
+                },
+
+                body: JSON.stringify({
+
+                    model: "openrouter/free",
+
+                    messages: [
+                        {
+                            role: "user",
+
+                            content: `
 You are an expert software engineer and code reviewer.
 
 Review the following GitHub code change.
@@ -77,103 +111,200 @@ SUGGESTIONS:
 SUMMARY:
 - Give a short summary of the review.
 `
-        });
+                        }
+                    ]
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error?.message ||
+                `OpenRouter HTTP ${response.status}`
+            );
+        }
+
+        const review =
+            data.choices?.[0]?.message?.content ||
+            "No review returned.";
 
         console.log("\nAI REVIEW RESULT:");
-        console.log(response.text);
+
+        console.log(review);
 
         console.log("\n====================================\n");
 
+        // ==================================================
+        // SAVE REVIEW
+        // ==================================================
+
+        const reviewData = {
+            id: Date.now(),
+
+            repository: commitInfo.repository,
+
+            branch: commitInfo.branch,
+
+            commitSha: commitInfo.commitSha,
+
+            commitMessage: commitInfo.commitMessage,
+
+            author: commitInfo.author,
+
+            file: commitInfo.file,
+
+            status: commitInfo.status,
+
+            additions: commitInfo.additions,
+
+            deletions: commitInfo.deletions,
+
+            review: review,
+
+            createdAt: new Date().toISOString()
+        };
+
+        reviews.unshift(reviewData);
+
+        // Keep only latest 20 reviews
+        reviews = reviews.slice(0, 20);
+
+        console.log("AI review saved successfully.");
+
+        return reviewData;
+
     } catch (error) {
-        console.log("\nGemini API error:");
+
+        console.log("\nOpenRouter API error:");
+
         console.log(error.message);
+
+        return null;
     }
 }
 
-// ================================
-// GITHUB WEBHOOK ROUTE
-// ================================
+// ==================================================
+// PROCESS GITHUB PUSH
+// ==================================================
 
-app.post("/webhook", async (req, res) => {
-    const event = req.headers["x-github-event"];
-    const payload = req.body;
+async function processPush(payload) {
 
-    console.log("\n========== GITHUB WEBHOOK ==========");
-    console.log("Event:", event);
+    try {
 
-    // ================================
-    // GITHUB PING EVENT
-    // ================================
+        const repository =
+            payload.repository?.full_name;
 
-    if (event === "ping") {
-        console.log("GitHub webhook connected successfully!");
+        const branch =
+            payload.ref?.replace(
+                "refs/heads/",
+                ""
+            );
 
-        return res.status(200).send("Webhook connected!");
-    }
+        const commits =
+            payload.commits || [];
 
-    // ================================
-    // GITHUB PUSH EVENT
-    // ================================
+        console.log("\n========== PROCESSING PUSH ==========");
 
-    if (event === "push") {
-        const repository = payload.repository?.full_name;
-        const branch = payload.ref?.replace("refs/heads/", "");
-        const commits = payload.commits || [];
+        console.log(
+            "Repository:",
+            repository
+        );
 
-        console.log("Repository:", repository);
-        console.log("Branch:", branch);
+        console.log(
+            "Branch:",
+            branch
+        );
 
-        // Process every commit
+        // ==================================================
+        // PROCESS EVERY COMMIT
+        // ==================================================
+
         for (const commit of commits) {
 
             console.log("\nWebhook Commit:");
-            console.log("Commit SHA:", commit.id);
-            console.log("Message:", commit.message);
-            console.log("Author:", commit.author?.name);
+
+            console.log(
+                "Commit SHA:",
+                commit.id
+            );
+
+            console.log(
+                "Message:",
+                commit.message
+            );
+
+            console.log(
+                "Author:",
+                commit.author?.name
+            );
 
             try {
 
-                // ================================
+                // ==================================================
                 // GET COMPLETE COMMIT INFORMATION
-                // ================================
+                // ==================================================
 
-                const response = await octokit.repos.getCommit({
-                    owner: payload.repository.owner.login,
-                    repo: payload.repository.name,
-                    ref: commit.id
-                });
+                const response =
+                    await octokit.repos.getCommit({
 
-                console.log("\nGitHub API Commit Details:");
-                console.log("Commit SHA:", response.data.sha);
-                console.log("Message:", response.data.commit.message);
+                        owner:
+                            payload.repository.owner.login,
 
-                // ================================
+                        repo:
+                            payload.repository.name,
+
+                        ref:
+                            commit.id
+
+                    });
+
+                console.log(
+                    "\nGitHub API Commit Details:"
+                );
+
+                console.log(
+                    "Commit SHA:",
+                    response.data.sha
+                );
+
+                console.log(
+                    "Message:",
+                    response.data.commit.message
+                );
+
+                // ==================================================
                 // CHANGED FILES
-                // ================================
+                // ==================================================
 
                 console.log("\nChanged Files:");
 
                 if (response.data.files) {
 
-                    for (const file of response.data.files) {
+                    for (
+                        const file of response.data.files
+                    ) {
 
                         console.log(
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
                         );
 
-                        // ================================
+                        // ==================================================
                         // CODE DIFF
-                        // ================================
+                        // ==================================================
 
                         if (file.patch) {
 
-                            console.log("\n--- CODE DIFF ---");
+                            console.log(
+                                "\n--- CODE DIFF ---"
+                            );
+
+
                             console.log(file.patch);
                             console.log("--- END CODE DIFF ---\n");
 
-                            // ================================
-                            // SEND CODE TO GEMINI
-                            // ================================
                             const codeDiff = `File: ${file.filename}
 
 Status: ${file.status}
@@ -181,20 +312,39 @@ Status: ${file.status}
 Changes:
 ${file.patch}`;
 
-// Send code to Gemini for review
-await reviewCode(codeDiff);
+                            const commitInfo = {
+                                repository: repository,
+                                branch: branch,
+                                commitSha: commit.id,
+                                commitMessage: commit.message,
+                                author: commit.author?.name,
+                                file: file.filename,
+                                status: file.status,
+                                additions: file.additions,
+                                deletions: file.deletions
+                            };
 
-// Generate documentation using the DocuLive AI engine
-try {
-    const documentation = await generateDocumentation(codeDiff);
+                            // Send code for AI review
+                            await reviewCode(codeDiff, commitInfo);
 
-    console.log("\n========== AI DOCUMENTATION ==========");
-    console.log("Summary:", documentation.summary);
-    console.log("Documentation:", documentation.documentation);
-    console.log("======================================\n");
-} catch (error) {
-    console.error("Documentation generation failed:", error.message);
-}
+                            // Generate documentation using the DocuLive AI engine
+                            try {
+                                const documentation =
+                                    await generateDocumentation(codeDiff);
+
+                                console.log("\n========== AI DOCUMENTATION ==========");
+                                console.log("Summary:", documentation.summary);
+                                console.log("Documentation:", documentation.documentation);
+                                console.log("======================================\n");
+                            } catch (error) {
+                                console.error(
+                                    "Documentation generation failed:",
+                                    error.message
+                                );
+                            }
+
+
+
 
  } else {console.log(
                      "No text patch available for this file."
@@ -212,19 +362,106 @@ try {
                 );
             }
         }
+
+        console.log(
+            "\n========== PUSH PROCESSING COMPLETE ==========\n"
+        );
+
+    } catch (error) {
+
+        console.log(
+            "Push processing error:",
+            error.message
+        );
+    }
+}
+
+// ==================================================
+// GITHUB WEBHOOK ROUTE
+// ==================================================
+
+app.post("/webhook", (req, res) => {
+
+    const event =
+        req.headers["x-github-event"];
+
+    const payload =
+        req.body;
+
+    console.log(
+        "\n========== GITHUB WEBHOOK =========="
+    );
+
+    console.log(
+        "Event:",
+        event
+    );
+
+    // ==================================================
+    // GITHUB PING EVENT
+    // ==================================================
+
+    if (event === "ping") {
+
+        console.log(
+            "GitHub webhook connected successfully!"
+        );
+
+        return res
+            .status(200)
+            .send("Webhook connected!");
     }
 
-    console.log("\n====================================\n");
+    // ==================================================
+    // GITHUB PUSH EVENT
+    // ==================================================
 
-    res.status(200).send("Webhook received successfully!");
+    if (event === "push") {
+
+        // Respond immediately to GitHub.
+        // AI processing continues in background.
+
+        res
+            .status(200)
+            .send("Webhook received successfully!");
+
+        console.log(
+            "Webhook acknowledged by server."
+        );
+
+        console.log(
+            "Starting background AI code review..."
+        );
+
+        processPush(payload).catch((error) => {
+
+            console.log(
+                "Background processing error:",
+                error.message
+            );
+
+        });
+
+        return;
+    }
+
+    // ==================================================
+    // OTHER EVENTS
+    // ==================================================
+
+    res
+        .status(200)
+        .send("Webhook received successfully!");
+
 });
 
-// ================================
-// START SERVER
-// ================================
+
+ // ============================================
+ // START SERVER
+ // ============================================
 
 app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+    console.log(
+        `Server running at http://localhost:${PORT}`
+    );
 });
-
-// Gemini AI code review integration
