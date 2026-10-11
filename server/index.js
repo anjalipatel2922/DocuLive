@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const { generateDocumentation } = require("./documentationClient");
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
 const cors = require("cors");
@@ -301,62 +301,53 @@ async function processPush(payload) {
                                 "\n--- CODE DIFF ---"
                             );
 
-                            console.log(
-                                file.patch
-                            );
 
-                            console.log(
-                                "--- END CODE DIFF ---\n"
-                            );
+                            console.log(file.patch);
+                            console.log("--- END CODE DIFF ---\n");
 
-                            // ==================================================
-                            // SEND CODE TO OPENROUTER
-                            // ==================================================
-
-                            await reviewCode(
-
-                                `File: ${file.filename}
+                            const codeDiff = `File: ${file.filename}
 
 Status: ${file.status}
 
 Changes:
-${file.patch}`,
+${file.patch}`;
 
-                                {
-                                    repository:
-                                        repository,
+                            const commitInfo = {
+                                repository: repository,
+                                branch: branch,
+                                commitSha: commit.id,
+                                commitMessage: commit.message,
+                                author: commit.author?.name,
+                                file: file.filename,
+                                status: file.status,
+                                additions: file.additions,
+                                deletions: file.deletions
+                            };
 
-                                    branch:
-                                        branch,
+                            // Send code for AI review
+                            await reviewCode(codeDiff, commitInfo);
 
-                                    commitSha:
-                                        commit.id,
+                            // Generate documentation using the DocuLive AI engine
+                            try {
+                                const documentation =
+                                    await generateDocumentation(codeDiff);
 
-                                    commitMessage:
-                                        commit.message,
+                                console.log("\n========== AI DOCUMENTATION ==========");
+                                console.log("Summary:", documentation.summary);
+                                console.log("Documentation:", documentation.documentation);
+                                console.log("======================================\n");
+                            } catch (error) {
+                                console.error(
+                                    "Documentation generation failed:",
+                                    error.message
+                                );
+                            }
 
-                                    author:
-                                        commit.author?.name,
 
-                                    file:
-                                        file.filename,
 
-                                    status:
-                                        file.status,
 
-                                    additions:
-                                        file.additions,
-
-                                    deletions:
-                                        file.deletions
-                                }
-
-                            );
-
-                        } else {
-
-                            console.log(
-                                "No text patch available for this file."
+ } else {console.log(
+                     "No text patch available for this file."
                             );
                         }
                     }
@@ -464,14 +455,13 @@ app.post("/webhook", (req, res) => {
 
 });
 
-// ==================================================
-// START SERVER
-// ==================================================
+
+ // ============================================
+ // START SERVER
+ // ============================================
 
 app.listen(PORT, () => {
-
     console.log(
         `Server running at http://localhost:${PORT}`
     );
-
 });
