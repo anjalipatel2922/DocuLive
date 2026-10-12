@@ -1,33 +1,22 @@
 const express = require("express");
-const { generateDocumentation } = require("./ollama");
-
 const router = express.Router();
+
+const { generateDocumentation } = require("./ollama");
 
 router.post("/generate-documentation", async (req, res) => {
   try {
-    const { diff } = req.body;
+    const documentation = await generateDocumentation(req.body?.diff);
 
-    // Check whether a diff was provided
-    if (!diff || typeof diff !== "string") {
-      return res.status(400).json({
-        error: "Git diff is required."
-      });
-    }
-
-    // Send the diff to the AI engine
-    const documentation = await generateDocumentation(diff);
-
-    res.json({
+    return res.status(200).json({
       success: true,
       documentation
     });
-
   } catch (error) {
     console.error("Documentation generation failed:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: "Failed to generate documentation."
+      error: error.message || "Failed to generate documentation."
     });
   }
 });
