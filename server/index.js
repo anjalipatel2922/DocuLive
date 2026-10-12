@@ -1,4 +1,6 @@
+
 require("dotenv").config();
+
 const { generateDocumentation } = require("./documentationClient");
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
@@ -15,8 +17,6 @@ const PORT = 5000;
 // STORE AI REVIEWS
 // ==================================================
 
-// Stores reviews while the server is running.
-// This will be replaced by a database later if needed.
 let reviews = [];
 
 // ==================================================
@@ -40,13 +40,11 @@ app.get("/", (req, res) => {
 // ==================================================
 
 app.get("/api/reviews", (req, res) => {
-
     res.status(200).json({
         success: true,
         count: reviews.length,
         reviews: reviews
     });
-
 });
 
 // ==================================================
@@ -54,31 +52,24 @@ app.get("/api/reviews", (req, res) => {
 // ==================================================
 
 async function reviewCode(codeDiff, commitInfo) {
-
     try {
-
         console.log("\n========== AI CODE REVIEW ==========");
 
         const response = await fetch(
             "https://openrouter.ai/api/v1/chat/completions",
             {
                 method: "POST",
-
                 headers: {
                     "Content-Type": "application/json",
                     "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
                     "HTTP-Referer": "http://localhost:5000",
                     "X-Title": "DocuLive AI Code Review"
                 },
-
                 body: JSON.stringify({
-
                     model: "openrouter/free",
-
                     messages: [
                         {
                             role: "user",
-
                             content: `
 You are an expert software engineer and code reviewer.
 
@@ -120,7 +111,6 @@ SUMMARY:
         const data = await response.json();
 
         if (!response.ok) {
-
             throw new Error(
                 data.error?.message ||
                 `OpenRouter HTTP ${response.status}`
@@ -132,44 +122,29 @@ SUMMARY:
             "No review returned.";
 
         console.log("\nAI REVIEW RESULT:");
-
         console.log(review);
-
         console.log("\n====================================\n");
 
-        // ==================================================
         // SAVE REVIEW
-        // ==================================================
 
         const reviewData = {
             id: Date.now(),
-
             repository: commitInfo.repository,
-
             branch: commitInfo.branch,
-
             commitSha: commitInfo.commitSha,
-
             commitMessage: commitInfo.commitMessage,
-
             author: commitInfo.author,
-
             file: commitInfo.file,
-
             status: commitInfo.status,
-
             additions: commitInfo.additions,
-
             deletions: commitInfo.deletions,
-
             review: review,
-
             createdAt: new Date().toISOString()
         };
 
         reviews.unshift(reviewData);
 
-        // Keep only latest 20 reviews
+        // Keep only the latest 20 reviews.
         reviews = reviews.slice(0, 20);
 
         console.log("AI review saved successfully.");
@@ -177,11 +152,8 @@ SUMMARY:
         return reviewData;
 
     } catch (error) {
-
         console.log("\nOpenRouter API error:");
-
         console.log(error.message);
-
         return null;
     }
 }
@@ -191,117 +163,55 @@ SUMMARY:
 // ==================================================
 
 async function processPush(payload) {
-
     try {
+        const repository = payload.repository?.full_name;
 
-        const repository =
-            payload.repository?.full_name;
+        const branch = payload.ref?.replace(
+            "refs/heads/",
+            ""
+        );
 
-        const branch =
-            payload.ref?.replace(
-                "refs/heads/",
-                ""
-            );
-
-        const commits =
-            payload.commits || [];
+        const commits = payload.commits || [];
 
         console.log("\n========== PROCESSING PUSH ==========");
+        console.log("Repository:", repository);
+        console.log("Branch:", branch);
 
-        console.log(
-            "Repository:",
-            repository
-        );
-
-        console.log(
-            "Branch:",
-            branch
-        );
-
-        // ==================================================
         // PROCESS EVERY COMMIT
-        // ==================================================
 
         for (const commit of commits) {
-
             console.log("\nWebhook Commit:");
-
-            console.log(
-                "Commit SHA:",
-                commit.id
-            );
-
-            console.log(
-                "Message:",
-                commit.message
-            );
-
-            console.log(
-                "Author:",
-                commit.author?.name
-            );
+            console.log("Commit SHA:", commit.id);
+            console.log("Message:", commit.message);
+            console.log("Author:", commit.author?.name);
 
             try {
-
-                // ==================================================
                 // GET COMPLETE COMMIT INFORMATION
-                // ==================================================
 
-                const response =
-                    await octokit.repos.getCommit({
+                const response = await octokit.repos.getCommit({
+                    owner: payload.repository.owner.login,
+                    repo: payload.repository.name,
+                    ref: commit.id
+                });
 
-                        owner:
-                            payload.repository.owner.login,
+                console.log("\nGitHub API Commit Details:");
+                console.log("Commit SHA:", response.data.sha);
+                console.log("Message:", response.data.commit.message);
 
-                        repo:
-                            payload.repository.name,
-
-                        ref:
-                            commit.id
-
-                    });
-
-                console.log(
-                    "\nGitHub API Commit Details:"
-                );
-
-                console.log(
-                    "Commit SHA:",
-                    response.data.sha
-                );
-
-                console.log(
-                    "Message:",
-                    response.data.commit.message
-                );
-
-                // ==================================================
                 // CHANGED FILES
-                // ==================================================
 
                 console.log("\nChanged Files:");
 
                 if (response.data.files) {
-
-                    for (
-                        const file of response.data.files
-                    ) {
-
+                    for (const file of response.data.files) {
                         console.log(
                             `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
                         );
 
-                        // ==================================================
                         // CODE DIFF
-                        // ==================================================
 
                         if (file.patch) {
-
-                            console.log(
-                                "\n--- CODE DIFF ---"
-                            );
-
-
+                            console.log("\n--- CODE DIFF ---");
                             console.log(file.patch);
                             console.log("--- END CODE DIFF ---\n");
 
@@ -324,18 +234,29 @@ ${file.patch}`;
                                 deletions: file.deletions
                             };
 
-                            // Send code for AI review
+                            // SEND CODE FOR AI REVIEW
+
                             await reviewCode(codeDiff, commitInfo);
 
-                            // Generate documentation using the DocuLive AI engine
+                            // GENERATE DOCUMENTATION
+
                             try {
                                 const documentation =
                                     await generateDocumentation(codeDiff);
 
                                 console.log("\n========== AI DOCUMENTATION ==========");
-                                console.log("Summary:", documentation.summary);
-                                console.log("Documentation:", documentation.documentation);
-                                console.log("======================================\n");
+                                console.log(
+                                    "Summary:",
+                                    documentation.summary
+                                );
+                                console.log(
+                                    "Documentation:",
+                                    documentation.documentation
+                                );
+                                console.log(
+                                    "======================================\n"
+                                );
+
                             } catch (error) {
                                 console.error(
                                     "Documentation generation failed:",
@@ -343,18 +264,15 @@ ${file.patch}`;
                                 );
                             }
 
-
-
-
- } else {console.log(
-                     "No text patch available for this file."
+                        } else {
+                            console.log(
+                                "No text patch available for this file."
                             );
                         }
                     }
                 }
 
             } catch (error) {
-
                 console.log(
                     "GitHub API error:",
                     error.status,
@@ -368,7 +286,6 @@ ${file.patch}`;
         );
 
     } catch (error) {
-
         console.log(
             "Push processing error:",
             error.message
@@ -381,87 +298,56 @@ ${file.patch}`;
 // ==================================================
 
 app.post("/webhook", (req, res) => {
+    const event = req.headers["x-github-event"];
+    const payload = req.body;
 
-    const event =
-        req.headers["x-github-event"];
+    console.log("\n========== GITHUB WEBHOOK ==========");
+    console.log("Event:", event);
 
-    const payload =
-        req.body;
-
-    console.log(
-        "\n========== GITHUB WEBHOOK =========="
-    );
-
-    console.log(
-        "Event:",
-        event
-    );
-
-    // ==================================================
     // GITHUB PING EVENT
-    // ==================================================
 
     if (event === "ping") {
-
-        console.log(
-            "GitHub webhook connected successfully!"
-        );
+        console.log("GitHub webhook connected successfully!");
 
         return res
             .status(200)
             .send("Webhook connected!");
     }
 
-    // ==================================================
     // GITHUB PUSH EVENT
-    // ==================================================
 
     if (event === "push") {
-
         // Respond immediately to GitHub.
-        // AI processing continues in background.
+        // AI processing continues in the background.
 
         res
             .status(200)
             .send("Webhook received successfully!");
 
-        console.log(
-            "Webhook acknowledged by server."
-        );
-
-        console.log(
-            "Starting background AI code review..."
-        );
+        console.log("Webhook acknowledged by server.");
+        console.log("Starting background AI code review...");
 
         processPush(payload).catch((error) => {
-
             console.log(
                 "Background processing error:",
                 error.message
             );
-
         });
 
         return;
     }
 
-    // ==================================================
     // OTHER EVENTS
-    // ==================================================
 
     res
         .status(200)
         .send("Webhook received successfully!");
-
 });
 
-
- // ============================================
- // START SERVER
- // ============================================
+// ==================================================
+// START SERVER
+// ==================================================
 
 app.listen(PORT, () => {
-    console.log(
-        `Server running at http://localhost:${PORT}`
-    );
+    console.log(`Server running at http://localhost:${PORT}`);
 });
