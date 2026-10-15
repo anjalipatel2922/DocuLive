@@ -1,10 +1,10 @@
 
 require("dotenv").config();
 
-const { generateDocumentation } = require("./documentationClient");
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
 const cors = require("cors");
+const { generateDocumentation } = require("./documentationClient");
 
 const app = express();
 
@@ -144,16 +144,16 @@ SUMMARY:
 
         reviews.unshift(reviewData);
 
-        // Keep only the latest 20 reviews.
+        // Keep only the latest 20 reviews
         reviews = reviews.slice(0, 20);
 
         console.log("AI review saved successfully.");
 
         return reviewData;
-
     } catch (error) {
-        console.log("\nOpenRouter API error:");
-        console.log(error.message);
+        console.error("\nOpenRouter API error:");
+        console.error(error.message);
+
         return null;
     }
 }
@@ -198,82 +198,87 @@ async function processPush(payload) {
                 console.log("Commit SHA:", response.data.sha);
                 console.log("Message:", response.data.commit.message);
 
-                // CHANGED FILES
+                // PROCESS CHANGED FILES
 
                 console.log("\nChanged Files:");
 
-                if (response.data.files) {
-                    for (const file of response.data.files) {
+                if (!response.data.files) {
+                    continue;
+                }
+
+                for (const file of response.data.files) {
+                    console.log(
+                        `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
+                    );
+
+                    if (!file.patch) {
                         console.log(
-                            `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
+                            "No text patch available for this file."
                         );
+                        continue;
+                    }
 
-                        // CODE DIFF
+                    // PREPARE CODE DIFF
 
-                        if (file.patch) {
-                            console.log("\n--- CODE DIFF ---");
-                            console.log(file.patch);
-                            console.log("--- END CODE DIFF ---\n");
-
-                            const codeDiff = `File: ${file.filename}
+                    const codeDiff = `File: ${file.filename}
 
 Status: ${file.status}
 
 Changes:
 ${file.patch}`;
 
-                            const commitInfo = {
-                                repository: repository,
-                                branch: branch,
-                                commitSha: commit.id,
-                                commitMessage: commit.message,
-                                author: commit.author?.name,
-                                file: file.filename,
-                                status: file.status,
-                                additions: file.additions,
-                                deletions: file.deletions
-                            };
+                    console.log("\n--- CODE DIFF ---");
+                    console.log(file.patch);
+                    console.log("--- END CODE DIFF ---\n");
 
-                            // SEND CODE FOR AI REVIEW
+                    const commitInfo = {
+                        repository: repository,
+                        branch: branch,
+                        commitSha: commit.id,
+                        commitMessage: commit.message,
+                        author: commit.author?.name,
+                        file: file.filename,
+                        status: file.status,
+                        additions: file.additions,
+                        deletions: file.deletions
+                    };
 
-                            await reviewCode(codeDiff, commitInfo);
+                    // RUN AI CODE REVIEW
 
-                            // GENERATE DOCUMENTATION
+                    await reviewCode(codeDiff, commitInfo);
 
-                            try {
-                                const documentation =
-                                    await generateDocumentation(codeDiff);
+                    // GENERATE AI DOCUMENTATION
 
-                                console.log("\n========== AI DOCUMENTATION ==========");
-                                console.log(
-                                    "Summary:",
-                                    documentation.summary
-                                );
-                                console.log(
-                                    "Documentation:",
-                                    documentation.documentation
-                                );
-                                console.log(
-                                    "======================================\n"
-                                );
+                    try {
+                        console.log(
+                            "\n========== AI DOCUMENTATION =========="
+                        );
 
-                            } catch (error) {
-                                console.error(
-                                    "Documentation generation failed:",
-                                    error.message
-                                );
-                            }
+                        const documentation =
+                            await generateDocumentation(codeDiff);
 
-                        } else {
-                            console.log(
-                                "No text patch available for this file."
-                            );
-                        }
+                        console.log(
+                            "Summary:",
+                            documentation.summary
+                        );
+
+                        console.log(
+                            "Documentation:",
+                            documentation.documentation
+                        );
+
+                        console.log(
+                            "======================================\n"
+                        );
+                    } catch (error) {
+                        console.error(
+                            "Documentation generation failed:",
+                            error.message
+                        );
                     }
                 }
-
             } catch (error) {
-                console.log(
+                console.error(
                     "GitHub API error:",
                     error.status,
                     error.message
@@ -284,9 +289,8 @@ ${file.patch}`;
         console.log(
             "\n========== PUSH PROCESSING COMPLETE ==========\n"
         );
-
     } catch (error) {
-        console.log(
+        console.error(
             "Push processing error:",
             error.message
         );
@@ -325,10 +329,10 @@ app.post("/webhook", (req, res) => {
             .send("Webhook received successfully!");
 
         console.log("Webhook acknowledged by server.");
-        console.log("Starting background AI code review...");
+        console.log("Starting background AI code review and documentation...");
 
         processPush(payload).catch((error) => {
-            console.log(
+            console.error(
                 "Background processing error:",
                 error.message
             );
