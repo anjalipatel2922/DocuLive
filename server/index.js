@@ -7,17 +7,18 @@ const cors = require("cors");
 const { generateDocumentation } = require("./documentationClient");
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
 const PORT = 5000;
 
 // ==================================================
-// STORE AI REVIEWS
+// TEMPORARY IN-MEMORY STORAGE
+// Member 4 can replace this with MongoDB later.
 // ==================================================
 
 let reviews = [];
+let documentationHistory = [];
 
 // ==================================================
 // GITHUB API CONNECTION
@@ -43,7 +44,45 @@ app.get("/api/reviews", (req, res) => {
     res.status(200).json({
         success: true,
         count: reviews.length,
-        reviews: reviews
+        reviews
+    });
+});
+
+// ==================================================
+// GET LATEST DOCUMENTATION
+// ==================================================
+
+app.get("/api/documentation", (req, res) => {
+    res.status(200).json({
+        success: true,
+        documentation: documentationHistory[0] || null
+    });
+});
+
+// ==================================================
+// GET DOCUMENTATION HISTORY
+// ==================================================
+
+app.get("/api/documentation/history", (req, res) => {
+    res.status(200).json({
+        success: true,
+        count: documentationHistory.length,
+        documentation: documentationHistory
+    });
+});
+
+// ==================================================
+// GET LATEST REPOSITORY DETAILS
+// ==================================================
+
+app.get("/api/repository", (req, res) => {
+    const latest = documentationHistory[0];
+
+    res.status(200).json({
+        success: true,
+        repository: latest?.repository || null,
+        branch: latest?.branch || null,
+        commitSha: latest?.commitSha || null
     });
 });
 
@@ -61,7 +100,8 @@ async function reviewCode(codeDiff, commitInfo) {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    "Authorization":
+                        `Bearer ${process.env.OPENROUTER_API_KEY}`,
                     "HTTP-Referer": "http://localhost:5000",
                     "X-Title": "DocuLive AI Code Review"
                 },
@@ -73,25 +113,20 @@ async function reviewCode(codeDiff, commitInfo) {
                             content: `
 You are an expert software engineer and code reviewer.
 
-Review the following GitHub code change.
+Review this GitHub code change:
 
 ${codeDiff}
 
-Analyze the code carefully and provide a practical code review.
-
-Use exactly this format:
+Provide a practical review using this format:
 
 BUGS:
 - List bugs or potential bugs.
-- If there are no important bugs, say "No major bugs found."
 
 SECURITY:
 - List security problems.
-- If there are no security problems, say "No major security issues found."
 
 PERFORMANCE:
 - List performance concerns.
-- If there are no important concerns, say "No major performance issues found."
 
 CODE QUALITY:
 - List code quality issues.
@@ -100,7 +135,7 @@ SUGGESTIONS:
 - Give practical improvements.
 
 SUMMARY:
-- Give a short summary of the review.
+- Give a short summary.
 `
                         }
                     ]
@@ -121,14 +156,42 @@ SUMMARY:
             data.choices?.[0]?.message?.content ||
             "No review returned.";
 
-        console.log("\nAI REVIEW RESULT:");
-        console.log(review);
-        console.log("\n====================================\n");
-
-        // SAVE REVIEW
-
         const reviewData = {
             id: Date.now(),
+            ...commitInfo,
+            review,
+            createdAt: new Date().toISOString()
+        };
+
+        reviews.unshift(reviewData);
+        reviews = reviews.slice(0, 20);
+
+        console.log("AI review saved successfully.");
+        console.log(review);
+
+        return reviewData;
+    } catch (error) {
+        console.error("OpenRouter API error:", error.message);
+        return null;
+    }
+}
+
+// ==================================================
+// GENERATE AND STORE DOCUMENTATION
+// ==================================================
+
+async function saveDocumentation(codeDiff, commitInfo) {
+    try {
+        console.log("\n========== AI DOCUMENTATION ==========");
+
+        const result = await generateDocumentation(codeDiff);
+
+        if (!result) {
+            throw new Error("Documentation engine returned no result.");
+        }
+
+        const documentationData = {
+            id: `${commitInfo.commitSha}-${commitInfo.file}`,
             repository: commitInfo.repository,
             branch: commitInfo.branch,
             commitSha: commitInfo.commitSha,
@@ -138,21 +201,27 @@ SUMMARY:
             status: commitInfo.status,
             additions: commitInfo.additions,
             deletions: commitInfo.deletions,
-            review: review,
+            summary: result.summary || "",
+            documentation: result.documentation || "",
             createdAt: new Date().toISOString()
         };
 
-        reviews.unshift(reviewData);
+        // Keep newest documentation first.
+        documentationHistory.unshift(documentationData);
 
-        // Keep only the latest 20 reviews
-        reviews = reviews.slice(0, 20);
+        // Temporary limit until MongoDB integration.
+        documentationHistory = documentationHistory.slice(0, 100);
 
-        console.log("AI review saved successfully.");
+        console.log("Documentation saved successfully.");
+        console.log("Summary:", documentationData.summary);
+        console.log("Documentation:", documentationData.documentation);
 
-        return reviewData;
+        return documentationData;
     } catch (error) {
-        console.error("\nOpenRouter API error:");
-        console.error(error.message);
+        console.error(
+            "Documentation generation failed:",
+            error.message
+        );
 
         return null;
     }
@@ -163,177 +232,99 @@ SUMMARY:
 // ==================================================
 
 async function processPush(payload) {
-    try {
-        const repository = payload.repository?.full_name;
+    const repository = payload.repository?.full_name;
 
-        const branch = payload.ref?.replace(
-            "refs/heads/",
-            ""
-        );
+    const branch = payload.ref?.replace("refs/heads/", "");
+    const commits = payload.commits || [];
 
-        const commits = payload.commits || [];
+    console.log("\n========== PROCESSING PUSH ==========");
+    console.log("Repository:", repository);
+    console.log("Branch:", branch);
 
-        console.log("\n========== PROCESSING PUSH ==========");
-        console.log("Repository:", repository);
-        console.log("Branch:", branch);
-
-        // PROCESS EVERY COMMIT
-
-        for (const commit of commits) {
-            console.log("\nWebhook Commit:");
-            console.log("Commit SHA:", commit.id);
+    for (const commit of commits) {
+        try {
+            console.log("\nCommit:", commit.id);
             console.log("Message:", commit.message);
-            console.log("Author:", commit.author?.name);
 
-            try {
-                // GET COMPLETE COMMIT INFORMATION
+            const response = await octokit.repos.getCommit({
+                owner: payload.repository.owner.login,
+                repo: payload.repository.name,
+                ref: commit.id
+            });
 
-                const response = await octokit.repos.getCommit({
-                    owner: payload.repository.owner.login,
-                    repo: payload.repository.name,
-                    ref: commit.id
-                });
+            const files = response.data.files || [];
 
-                console.log("\nGitHub API Commit Details:");
-                console.log("Commit SHA:", response.data.sha);
-                console.log("Message:", response.data.commit.message);
+            for (const file of files) {
+                console.log("Changed file:", file.filename);
 
-                // PROCESS CHANGED FILES
-
-                console.log("\nChanged Files:");
-
-                if (!response.data.files) {
+                if (!file.patch) {
+                    console.log(
+                        "No text patch available:",
+                        file.filename
+                    );
                     continue;
                 }
 
-                for (const file of response.data.files) {
-                    console.log(
-                        `${file.status}: ${file.filename} (+${file.additions} -${file.deletions})`
-                    );
-
-                    if (!file.patch) {
-                        console.log(
-                            "No text patch available for this file."
-                        );
-                        continue;
-                    }
-
-                    // PREPARE CODE DIFF
-
-                    const codeDiff = `File: ${file.filename}
+                const codeDiff = `File: ${file.filename}
 
 Status: ${file.status}
 
 Changes:
 ${file.patch}`;
 
-                    console.log("\n--- CODE DIFF ---");
-                    console.log(file.patch);
-                    console.log("--- END CODE DIFF ---\n");
+                const commitInfo = {
+                    repository,
+                    branch,
+                    commitSha: commit.id,
+                    commitMessage: commit.message,
+                    author: commit.author?.name,
+                    file: file.filename,
+                    status: file.status,
+                    additions: file.additions,
+                    deletions: file.deletions
+                };
 
-                    const commitInfo = {
-                        repository: repository,
-                        branch: branch,
-                        commitSha: commit.id,
-                        commitMessage: commit.message,
-                        author: commit.author?.name,
-                        file: file.filename,
-                        status: file.status,
-                        additions: file.additions,
-                        deletions: file.deletions
-                    };
+                // Run both AI features independently.
+                // One failure should not prevent the other.
 
-                    // RUN AI CODE REVIEW
-
-                    await reviewCode(codeDiff, commitInfo);
-
-                    // GENERATE AI DOCUMENTATION
-
-                    try {
-                        console.log(
-                            "\n========== AI DOCUMENTATION =========="
-                        );
-
-                        const documentation =
-                            await generateDocumentation(codeDiff);
-
-                        console.log(
-                            "Summary:",
-                            documentation.summary
-                        );
-
-                        console.log(
-                            "Documentation:",
-                            documentation.documentation
-                        );
-
-                        console.log(
-                            "======================================\n"
-                        );
-                    } catch (error) {
-                        console.error(
-                            "Documentation generation failed:",
-                            error.message
-                        );
-                    }
-                }
-            } catch (error) {
-                console.error(
-                    "GitHub API error:",
-                    error.status,
-                    error.message
-                );
+                await Promise.allSettled([
+                    reviewCode(codeDiff, commitInfo),
+                    saveDocumentation(codeDiff, commitInfo)
+                ]);
             }
+        } catch (error) {
+            console.error(
+                "Commit processing failed:",
+                commit.id,
+                error.message
+            );
         }
-
-        console.log(
-            "\n========== PUSH PROCESSING COMPLETE ==========\n"
-        );
-    } catch (error) {
-        console.error(
-            "Push processing error:",
-            error.message
-        );
     }
+
+    console.log("\n========== PUSH PROCESSING COMPLETE ==========\n");
 }
 
 // ==================================================
-// GITHUB WEBHOOK ROUTE
+// GITHUB WEBHOOK
 // ==================================================
 
 app.post("/webhook", (req, res) => {
     const event = req.headers["x-github-event"];
     const payload = req.body;
 
-    console.log("\n========== GITHUB WEBHOOK ==========");
-    console.log("Event:", event);
-
-    // GITHUB PING EVENT
+    console.log("GitHub event:", event);
 
     if (event === "ping") {
-        console.log("GitHub webhook connected successfully!");
-
-        return res
-            .status(200)
-            .send("Webhook connected!");
+        return res.status(200).send("Webhook connected!");
     }
 
-    // GITHUB PUSH EVENT
-
     if (event === "push") {
-        // Respond immediately to GitHub.
-        // AI processing continues in the background.
-
-        res
-            .status(200)
-            .send("Webhook received successfully!");
-
-        console.log("Webhook acknowledged by server.");
-        console.log("Starting background AI code review and documentation...");
+        // Acknowledge the event before AI processing.
+        res.status(200).send("Webhook received successfully!");
 
         processPush(payload).catch((error) => {
             console.error(
-                "Background processing error:",
+                "Background processing failed:",
                 error.message
             );
         });
@@ -341,11 +332,7 @@ app.post("/webhook", (req, res) => {
         return;
     }
 
-    // OTHER EVENTS
-
-    res
-        .status(200)
-        .send("Webhook received successfully!");
+    return res.status(200).send("Webhook received successfully!");
 });
 
 // ==================================================
