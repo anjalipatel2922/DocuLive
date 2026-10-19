@@ -6,12 +6,20 @@ require('dotenv').config();
 
 const connectDB = require('./config/db');
 const documentationRoutes = require('./routes/documentationRoutes');
+const githubWebhookRoutes = require('./routes/githubWebhookRoutes');
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    if (req.originalUrl.startsWith('/api/github-webhook')) {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
 app.use('/api/documentation', documentationRoutes);
+app.use('/api/github-webhook', githubWebhookRoutes);
 
 app.get('/', (req, res) => {
   res.send('DocuLive backend is running');
