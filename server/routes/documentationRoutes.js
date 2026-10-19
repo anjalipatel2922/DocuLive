@@ -7,7 +7,25 @@ const Documentation = require('../models/Documentation');
 // POST: Save new documentation
 router.post('/', async (req, res) => {
   try {
-    const documentation = new Documentation(req.body);
+    const { projectName, repositoryUrl } = req.body;
+
+    if (
+      typeof projectName !== 'string' ||
+      !projectName.trim() ||
+      typeof repositoryUrl !== 'string' ||
+      !repositoryUrl.trim()
+    ) {
+      return res.status(400).json({
+        message: 'Project name and repository URL are required.'
+      });
+    }
+
+    const documentation = new Documentation({
+      ...req.body,
+      projectName: projectName.trim(),
+      repositoryUrl: repositoryUrl.trim()
+    });
+
     const savedDocumentation = await documentation.save();
 
     res.status(201).json({
@@ -39,6 +57,12 @@ router.get('/', async (req, res) => {
 // GET: Retrieve documentation by ID
 router.get('/:id', async (req, res) => {
   try {
+    if (!/^[a-fA-F0-9]{24}$/.test(req.params.id)) {
+      return res.status(400).json({
+        message: 'Invalid documentation ID format'
+      });
+    }
+
     const documentation = await Documentation.findById(req.params.id);
 
     if (!documentation) {
@@ -49,11 +73,12 @@ router.get('/:id', async (req, res) => {
 
     res.status(200).json(documentation);
   } catch (error) {
-    res.status(400).json({
-      message: 'Invalid documentation ID',
+    res.status(500).json({
+      message: 'Failed to retrieve documentation',
       error: error.message
     });
   }
 });
 
 module.exports = router;
+
