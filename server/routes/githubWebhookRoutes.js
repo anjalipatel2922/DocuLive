@@ -189,9 +189,9 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
     });
 
     // Run AI documentation generation in the background
-    processPush(payload).catch(error => {
-      console.error('AI documentation generation failed:', error.message);
-    });
+   processPush(payload).catch(error => {
+  console.error('AI documentation generation failed:', error);
+});
   } catch (error) {
     console.error('GitHub webhook error:', error.message);
 
