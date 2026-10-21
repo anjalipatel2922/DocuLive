@@ -19,7 +19,8 @@ const documentationSchema = new mongoose.Schema({
 
   commitId: {
     type: String,
-    default: ''
+    default: undefined,
+    trim: true
   },
 
   summary: {
@@ -29,6 +30,16 @@ const documentationSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+documentationSchema.index(
+  { commitId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      commitId: { $type: 'string' }
+    }
+  }
+);
 
 module.exports = mongoose.model(
   'Documentation',
