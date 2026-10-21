@@ -1,27 +1,60 @@
+
+import { useEffect, useState } from 'react';
 import './App.css';
 import DocumentationViewer from './components/DocumentationViewer';
 
+const API_URL = 'https://doculive.onrender.com/api/documentation';
+
 function App() {
-  const documentationHistory = [
-    {
-      version: 'v1.2',
-      commit: 'abc123',
-      date: 'Today',
-      status: 'Current',
-    },
-    {
-      version: 'v1.1',
-      commit: 'def456',
-      date: 'Yesterday',
-      status: 'Archived',
-    },
-    {
-      version: 'v1.0',
-      commit: 'ghi789',
-      date: '2 days ago',
-      status: 'Archived',
-    },
-  ];
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadDashboard() {
+      try {
+        const response = await fetch(API_URL);
+
+        if (!response.ok) {
+          throw new Error('Could not load dashboard data.');
+        }
+
+        const result = await response.json();
+        const records = Array.isArray(result)
+          ? result
+          : result.value || result.documentation || [];
+
+        const sorted = [...records].sort(
+          (a, b) =>
+            new Date(b.updatedAt || b.createdAt || 0) -
+            new Date(a.updatedAt || a.createdAt || 0)
+        );
+
+        if (active) {
+          setDocuments(sorted);
+          setError('');
+        }
+      } catch (err) {
+        if (active) setError(err.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    loadDashboard();
+    const interval = setInterval(loadDashboard, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const latest = documents[0];
+  const formatDate = (date) =>
+    date ? new Date(date).toLocaleString() : 'Date unavailable';
 
   return (
     <div className="app">
@@ -33,6 +66,7 @@ function App() {
 
         <nav className="navigation">
           <a href="#dashboard">Dashboard</a>
+          <a href="#documentation">Documentation</a>
           <a href="#history">History</a>
         </nav>
       </header>
@@ -41,12 +75,10 @@ function App() {
         <section className="hero">
           <div>
             <p className="eyebrow">LIVE DOCUMENTATION</p>
-
             <h1>Documentation Dashboard</h1>
-
             <p className="hero-text">
-              Keep your project documentation synchronized with your
-              codebase as it changes.
+              Keep your project documentation synchronized with
+              changes in your codebase.
             </p>
           </div>
         </section>
@@ -54,81 +86,98 @@ function App() {
         <section className="repository-card">
           <div>
             <p className="card-label">CONNECTED REPOSITORY</p>
-
-            <h2>my-team / DocuLive</h2>
-
-            <p className="repository-description">
-              GitHub repository connected successfully.
-            </p>
+            <h2>DocuLive</h2>
+            <a
+              href="https://github.com/anjalipatel2922/DocuLive"
+              target="_blank"
+              rel="noreferrer"
+            >
+              anjalipatel2922 / DocuLive
+            </a>
           </div>
 
           <span className="status-badge">
             <span className="status-dot"></span>
-            Connected
+            {loading ? 'Connecting...' : error ? 'API unavailable' : 'API connected'}
           </span>
         </section>
 
+        {error && (
+          <p role="alert">
+            {error} Check your internet connection and try again.
+          </p>
+        )}
+
         <section className="summary-grid">
           <div className="summary-card">
-            <p className="card-label">LATEST UPDATE</p>
-
-            <h3>Commit #abc123</h3>
-
-            <p>Documentation generated from the latest code changes.</p>
-
-            <span className="time-text">5 minutes ago</span>
+            <p className="card-label">DOCUMENTATION RECORDS</p>
+            <h3>{loading ? 'Loading...' : documents.length}</h3>
+            <p>Records currently returned by the documentation API.</p>
           </div>
 
           <div className="summary-card">
-            <p className="card-label">DOCUMENTATION STATUS</p>
-
-            <h3 className="success-text">Up to date</h3>
-
-            <p>The documentation matches the latest repository version.</p>
-
-            <span className="time-text">Last generated today</span>
+            <p className="card-label">LATEST DOCUMENTATION UPDATE</p>
+            <h3 title={latest?.commitId || ''}>
+  {latest?.commitId
+    ? latest.commitId.slice(0, 8)
+    : loading
+      ? 'Loading...'
+      : 'No records'}
+</h3>
+            <p>{latest?.summary || 'No recent documentation available.'}</p>
+            <span className="time-text">
+              {latest ? formatDate(latest.updatedAt || latest.createdAt) : ''}
+            </span>
           </div>
         </section>
-                <DocumentationViewer />
+
+        <div id="documentation">
+          <DocumentationViewer />
+        </div>
 
         <section className="history-section" id="history">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">VERSION HISTORY</p>
+              <p className="eyebrow">DOCUMENTATION VERSIONS</p>
               <h2>Documentation History</h2>
             </div>
-
-            <a href="#history" className="history-button">
-  View all versions
-</a>
           </div>
 
-          <div className="history-table">
-            <div className="table-header">
-              <span>Version</span>
-              <span>Commit</span>
-              <span>Date</span>
-              <span>Status</span>
-            </div>
+          {loading && <p>Loading documentation history...</p>}
 
-            {documentationHistory.map((item) => (
-              <div className="table-row" key={item.version}>
-                <strong>{item.version}</strong>
-                <code>{item.commit}</code>
-                <span>{item.date}</span>
+          {!loading && !error && documents.length === 0 && (
+            <p>No documentation history is available yet.</p>
+          )}
 
-                <span
-                  className={
-                    item.status === 'Current'
-                      ? 'history-status current'
-                      : 'history-status'
-                  }
-                >
-                  {item.status}
-                </span>
+          {!error && documents.length > 0 && (
+            <div className="history-table">
+              <div className="table-header">
+                <span>Project</span>
+                <span>Commit</span>
+                <span>Date</span>
+                <span>Summary</span>
               </div>
-            ))}
-          </div>
+
+              {documents.map((doc) => (
+                <div className="table-row" key={doc._id}>
+                  <strong>{doc.projectName || 'DocuLive'}</strong>
+                  <code title={doc.commitId || ''}>
+                    {doc.commitId
+                      ? `${doc.commitId.slice(0, 8)}`
+                      : 'Unavailable'}
+                  </code>
+                  <span>{formatDate(doc.createdAt)}</span>
+                  <span>
+                    {doc.summary || 'No summary available.'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && error && (
+            <p>History could not be loaded from the API.</p>
+          )}
         </section>
       </main>
     </div>
