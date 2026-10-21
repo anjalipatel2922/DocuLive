@@ -8,6 +8,19 @@ const Documentation = require('../models/Documentation');
 router.post('/', async (req, res) => {
   try {
     const { projectName, repositoryUrl } = req.body;
+    const { commitId } = req.body;
+
+// Prevent duplicate documentation for the same commit
+if (commitId) {
+  const existingDocumentation = await Documentation.findOne({ commitId });
+
+  if (existingDocumentation) {
+    return res.status(409).json({
+      message: 'Documentation already exists for this commit.',
+      data: existingDocumentation
+    });
+  }
+}
 
     if (
       typeof projectName !== 'string' ||
