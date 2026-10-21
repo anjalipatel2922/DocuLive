@@ -204,3 +204,5 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 });
 
 module.exports = router;
+
+// Test: Verify the GitHub webhook and AI documentation workflow.
