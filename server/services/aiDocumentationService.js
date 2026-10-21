@@ -9,6 +9,12 @@ const generateDocumentation = async ({
     return 'No code changes were provided for documentation.';
   }
 
+  const accessToken = process.env.OLLAMA_PROXY_TOKEN;
+
+  if (!process.env.OLLAMA_URL || !accessToken) {
+    throw new Error('OLLAMA_URL or OLLAMA_PROXY_TOKEN is not configured');
+  }
+
   const prompt = `You are a software documentation assistant.
 Generate clear Markdown documentation from the supplied code changes.
 
@@ -28,20 +34,22 @@ Author: ${author || 'Not provided'}
 Code changes:
 ${codeChanges}`;
 
-  const response = await fetch('http://localhost:11434/api/generate', {
+  const ollamaUrl = process.env.OLLAMA_URL.replace(/\/+$/, '');
+
+  const response = await fetch(`${ollamaUrl}/api/generate`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
     },
     body: JSON.stringify({
-      model: 'qwen2.5-coder:7b',
       prompt,
       stream: false
     })
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama API failed: ${response.status}`);
+    throw new Error(`Ollama proxy failed: ${response.status}`);
   }
 
   const data = await response.json();
