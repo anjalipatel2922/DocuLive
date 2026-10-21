@@ -61,7 +61,7 @@ function App() {
       <header className="navbar">
         <div className="brand">
           <div className="brand-icon">D</div>
-          <span>DocuLive  Test</span>
+          <span>DocuLive</span>
         </div>
 
         <nav className="navigation">
