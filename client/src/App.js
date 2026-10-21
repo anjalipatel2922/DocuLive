@@ -2,29 +2,68 @@ import { useState } from "react";
 import "./App.css";
 
 function App() {
+ 
   const [review, setReview] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
 
-  const demoReview = {
-    bugs: "No major bugs found.",
-    security: "No major security issues found.",
-    performance: "No major performance issues found.",
-    quality:
-      "Some formatting inconsistencies were detected in the submitted code.",
-    suggestions:
-      "Use a consistent formatter such as Prettier or ESLint across the project.",
-    summary:
-      "The code does not contain major functional, security, or performance problems. The main improvement area is code formatting and consistency.",
-  };
+  const runAIReview = async () => {
+    if (!code.trim()) {
+      setError("Please enter some code to review.");
+      return;
+    }
 
-  const runDemoReview = () => {
     setLoading(true);
+    setError("");
+    setReview(null);
 
-    setTimeout(() => {
-      setReview(demoReview);
+    try {
+      const response = await fetch("http://localhost:5000/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ code }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "AI review failed.");
+      }
+
+      const result = data.review.review || "";
+
+      const getSection = (name) => {
+        const match = result.match(
+          new RegExp(
+            name + ":\\s*([\\s\\S]*?)(?=\\n(?:BUGS|SECURITY|PERFORMANCE|CODE QUALITY|SUGGESTIONS|SUMMARY):|$)",
+            "i"
+          )
+        );
+
+        return match ? match[1].trim() : "No details provided.";
+      };
+
+      setReview({
+        bugs: getSection("BUGS"),
+        security: getSection("SECURITY"),
+        performance: getSection("PERFORMANCE"),
+        quality: getSection("CODE QUALITY"),
+        suggestions: getSection("SUGGESTIONS"),
+        summary: getSection("SUMMARY"),
+      });
+    } catch (err) {
+      setError(
+        err.message ||
+          "Could not connect to the backend. Check that it is running."
+      );
+    } finally {
       setLoading(false);
-    }, 1200);
+    }
   };
+
 
   return (
     <div className="app">
@@ -73,14 +112,27 @@ function App() {
               and provides AI-powered feedback on bugs, security,
               performance and code quality.
             </p>
+            
+<textarea
+  className="code-input"
+  placeholder="Paste your code here for AI review..."
+  value={code}
+  onChange={(e) => setCode(e.target.value)}
+  rows={7}
+/>
 
-            <button
-              className="review-button"
-              onClick={runDemoReview}
-              disabled={loading}
-            >
-              {loading ? "Analyzing Code..." : "Run AI Code Review"}
-            </button>
+{error && <p className="error-message">{error}</p>}
+
+
+            
+<button
+  className="review-button"
+  onClick={runAIReview}
+  disabled={loading}
+>
+  {loading ? "Analyzing Code..." : "Run AI Code Review"}
+</button>
+
           </div>
 
           <div className="hero-card">

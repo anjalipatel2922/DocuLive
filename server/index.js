@@ -1,5 +1,5 @@
 
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
@@ -47,6 +47,54 @@ app.get("/api/reviews", (req, res) => {
         reviews
     });
 });
+
+app.post("/api/reviews", async (req, res) => {
+    try {
+        const { code } = req.body;
+
+        if (!code || typeof code !== "string" || !code.trim()) {
+            return res.status(400).json({
+                success: false,
+                error: "Please provide code to review."
+            });
+        }
+
+        const reviewData = await reviewCode(
+            code,
+            {
+                repository: "Manual Review",
+                branch: "manual",
+                commitSha: "manual-" + Date.now(),
+                commitMessage: "Manual code review",
+                author: "User",
+                file: "submitted-code",
+                status: "modified",
+                additions: 0,
+                deletions: 0
+            }
+        );
+
+        if (!reviewData) {
+            return res.status(502).json({
+                success: false,
+                error: "AI review failed. Check the backend terminal."
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            review: reviewData
+        });
+    } catch (error) {
+        console.error("Manual review failed:", error.message);
+
+        res.status(500).json({
+            success: false,
+            error: "Failed to review code."
+        });
+    }
+});
+
 
 // ==================================================
 // GET LATEST DOCUMENTATION
@@ -344,3 +392,4 @@ app.listen(PORT, () => {
 });
 
 // Webhook integration test
+
