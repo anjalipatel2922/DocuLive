@@ -62,3 +62,5 @@ ${codeChanges}`;
 };
 
 module.exports = { generateDocumentation };
+
+// Test: Verify AI documentation generation after a real code change.
