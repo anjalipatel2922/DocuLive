@@ -3,7 +3,18 @@ import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import './DocumentationViewer.css';
 
-const API_URL = 'https://doculive.onrender.com/api/documentation';
+const API_URL =
+  'https://doculive.onrender.com/api/documentation';
+
+function formatDate(date) {
+  if (!date) return 'Date unavailable';
+
+  const parsed = new Date(date);
+
+  return Number.isNaN(parsed.getTime())
+    ? 'Date unavailable'
+    : parsed.toLocaleString();
+}
 
 function DocumentationViewer() {
   const [documents, setDocuments] = useState([]);
@@ -19,32 +30,48 @@ function DocumentationViewer() {
         const response = await fetch(API_URL);
 
         if (!response.ok) {
-          throw new Error('Unable to load documentation.');
+          throw new Error(
+            `Unable to load documentation (${response.status}).`
+          );
         }
 
         const result = await response.json();
+
         const records = Array.isArray(result)
           ? result
-          : result.value || result.documentation || [];
+          : result.value ||
+            result.documentation ||
+            result.data ||
+            [];
+
+        if (!Array.isArray(records)) {
+          throw new Error('The API returned an unexpected format.');
+        }
+
+        const sorted = [...records].sort(
+          (a, b) =>
+            new Date(b.updatedAt || b.createdAt || 0) -
+            new Date(a.updatedAt || a.createdAt || 0)
+        );
 
         if (active) {
-          const sorted = [...records].sort(
-            (a, b) =>
-              new Date(b.updatedAt || b.createdAt || 0) -
-              new Date(a.updatedAt || a.createdAt || 0)
+          setDocuments(sorted);
+
+          setSelectedId((current) =>
+            sorted.some(
+              (doc) => String(doc._id) === String(current)
+            )
+              ? current
+              : String(sorted[0]?._id || '')
           );
 
-          setDocuments(sorted);
-          setSelectedId((current) =>
-            sorted.some((doc) => doc._id === current)
-              ? current
-              : sorted[0]?._id || ''
-          );
           setError('');
         }
       } catch (err) {
         if (active) {
-          setError(err.message || 'Something went wrong.');
+          setError(
+            err.message || 'Unable to load documentation.'
+          );
         }
       } finally {
         if (active) setLoading(false);
@@ -52,6 +79,7 @@ function DocumentationViewer() {
     }
 
     fetchDocumentation();
+
     const interval = setInterval(fetchDocumentation, 30000);
 
     return () => {
@@ -60,157 +88,315 @@ function DocumentationViewer() {
     };
   }, []);
 
-  const selected = documents.find((doc) => doc._id === selectedId);
+  const selected = documents.find(
+    (doc) => String(doc._id) === String(selectedId)
+  );
+
+  function downloadDocumentation() {
+    if (!selected) return;
+
+    const markdown = [
+      `# ${selected.projectName || 'Project Documentation'}`,
+      '',
+      `**Summary:** ${selected.summary || 'Not provided'}`,
+      '',
+      `**Commit:** ${selected.commitId || 'Not provided'}`,
+      '',
+      `**Repository:** ${selected.repositoryUrl || 'Not provided'}`,
+      '',
+      selected.content || 'No documentation content provided.',
+    ].join('\n');
+
+    const blob = new Blob([markdown], {
+      type: 'text/markdown;charset=utf-8',
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    const safeName = (
+      selected.projectName || 'documentation'
+    ).replace(/[^a-z0-9-_]/gi, '-');
+
+    link.href = url;
+    link.download =
+      `${safeName}-${(selected.commitId || 'latest').slice(0, 8)}.md`;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <section className="documentation-viewer">
-      <div className="documentation-header">
-        <div>
-          <p className="documentation-eyebrow">LIVE DOCUMENTATION</p>
+      <header className="documentation-header">
+        <div className="documentation-heading">
+          <p className="documentation-eyebrow">
+            LIVE DOCUMENTATION
+          </p>
+
           <h2>Project Documentation</h2>
+
           <p className="documentation-description">
-            Documentation fetched from the DocuLive API.
-            Updates are checked every 30 seconds.
+            Explore project changes, implementation details,
+            and documentation history in one place.
           </p>
         </div>
 
         <div className="documentation-commit">
-          {selected ? 'Commit ID' : 'API status'}
+          <span>SELECTED COMMIT</span>
           <strong>
-            {selected
-              ? `${selected.commitId || 'Not provided'}`.slice(0, 12)
+            {selected?.commitId
+              ? selected.commitId.slice(0, 12)
               : loading
                 ? 'Loading...'
-                : 'No records'}
+                : 'No commit'}
           </strong>
+
+          <span className="documentation-api-status">
+            <span
+              className={`documentation-status-dot ${
+                error
+                  ? 'is-error'
+                  : loading
+                    ? 'is-loading'
+                    : 'is-connected'
+              }`}
+            />
+            {error
+              ? 'API unavailable'
+              : loading
+                ? 'Connecting...'
+                : 'API connected'}
+          </span>
         </div>
-      </div>
-      
-{selected && (
-  <button
-    type="button"
-    className="download-documentation-button"
-    onClick={() => {
-      const markdown = [
-        `# ${selected.projectName || 'Project Documentation'}`,
-        '',
-        `**Commit:** ${selected.commitId || 'Not provided'}`,
-        `**Date:** ${selected.createdAt || 'Not provided'}`,
-        '',
-        '## Summary',
-        '',
-        selected.summary || 'No summary provided.',
-        '',
-        '## Documentation',
-        '',
-        selected.content || 'No documentation content provided.',
-      ].join('\n');
+      </header>
 
-      const blob = new Blob([markdown], {
-        type: 'text/markdown;charset=utf-8',
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
+      {selected && (
+        <div className="documentation-toolbar">
+          <span>
+            <strong>{documents.length}</strong>{' '}
+            documentation {documents.length === 1 ? 'record' : 'records'}
+          </span>
 
-      const safeName = (selected.projectName || 'documentation')
-        .replace(/[^a-z0-9-_]/gi, '-');
-
-      link.href = url;
-      link.download = `${safeName}-${(selected.commitId || 'latest').slice(0, 8)}.md`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    }}
-  >
-    Download Documentation
-  </button>
-)}
-
+          <button
+            type="button"
+            className="download-documentation-button"
+            onClick={downloadDocumentation}
+          >
+            Download Documentation
+          </button>
+        </div>
+      )}
 
       {loading && (
-        <p role="status">Loading documentation...</p>
+        <div className="documentation-message" role="status">
+          Loading documentation records...
+        </div>
       )}
 
       {error && (
-        <p role="alert">
-          {error} Please check your connection and try again later.
-        </p>
+        <div className="documentation-error" role="alert">
+          {error}
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+          >
+            Reload page
+          </button>
+        </div>
       )}
 
       {!loading && !error && documents.length === 0 && (
-        <p>No documentation records are available yet.</p>
+        <div className="documentation-message">
+          <h3>No documentation records found</h3>
+          <p>
+            The API responded successfully but returned no records.
+          </p>
+        </div>
       )}
 
       {!loading && !error && documents.length > 0 && (
-        <>
-          <div className="documentation-content">
-            <aside className="documentation-sidebar">
-              <h3>Documentation History</h3>
+        <div className="documentation-content">
+          <aside className="documentation-sidebar">
+            <div className="documentation-sidebar-heading">
+              <span className="documentation-sidebar-icon">↻</span>
+              <div>
+                <h3>Documentation History</h3>
+                <p>Select a record to view its details.</p>
+              </div>
+            </div>
 
-              {documents.map((doc) => (
-                <button
-                  type="button"
-                  key={doc._id}
-                  onClick={() => setSelectedId(doc._id)}
-                  aria-pressed={selectedId === doc._id}
-                  className={
-                    selectedId === doc._id
-                      ? 'documentation-history-item selected'
-                      : 'documentation-history-item'
-                  }
-                >
-                  <strong>{doc.projectName || 'Untitled project'}</strong>
-                  <span>{doc.summary || doc.commitId || 'Documentation'}</span>
-                  <small>
-                    {doc.createdAt
-                      ? new Date(doc.createdAt).toLocaleString()
-                      : 'Date unavailable'}
-                  </small>
-                </button>
-              ))}
-            </aside>
+            <div className="documentation-history-list">
+              {documents.map((doc, index) => {
+                const id = String(doc._id || index);
+                const isSelected = id === String(selectedId);
 
-            <article className="documentation-body">
-              {selected && (
-                <>
-                  <h3>{selected.projectName || 'Project Documentation'}</h3>
+                return (
+                  <button
+                    type="button"
+                    key={id}
+                    onClick={() => setSelectedId(id)}
+                    aria-pressed={isSelected}
+                    className={
+                      isSelected
+                        ? 'documentation-history-item selected'
+                        : 'documentation-history-item'
+                    }
+                  >
+                    <span className="history-item-topline">
+                      <span className="history-item-number">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
 
-                  <p>
-                    <strong>Summary:</strong>{' '}
-                    {selected.summary || 'No summary provided.'}
-                  </p>
+                      <span className="history-item-date">
+                        {formatDate(doc.updatedAt || doc.createdAt)}
+                      </span>
+                    </span>
 
-                  <p>
-                    <strong>Commit:</strong>{' '}
-                    {selected.commitId || 'Not provided'}
-                  </p>
+                    <strong>
+                      {doc.projectName || 'Untitled project'}
+                    </strong>
 
-                  <p>
-                    <strong>Repository:</strong>{' '}
-                    {selected.repositoryUrl ? (
-                      <a
-                        href={selected.repositoryUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open GitHub repository
-                      </a>
-                    ) : (
-                      'Not provided'
-                    )}
-                  </p>
+                    <span className="history-item-summary">
+                      {doc.summary ||
+                        doc.commitId ||
+                        'Project documentation'}
+                    </span>
 
-                  <hr />
+                    <span className="history-item-footer">
+                      {doc.commitId
+                        ? `Commit ${doc.commitId.slice(0, 8)}`
+                        : 'Documentation record'}
 
-                  <ReactMarkdown>
-                    {selected.content || 'No documentation content provided.'}
-                  </ReactMarkdown>
-                </>
-              )}
-            </article>
-          </div>
-        </>
+                      <span aria-hidden="true">→</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <article className="documentation-panel">
+            {selected ? (
+              <>
+                <div className="documentation-panel-header">
+                  <div>
+                    <p className="documentation-eyebrow">
+                      PROJECT OVERVIEW
+                    </p>
+
+                    <h2>
+                      {selected.projectName ||
+                        'Project Documentation'}
+                    </h2>
+                  </div>
+
+                  <span className="documentation-record-badge">
+                    Documentation
+                  </span>
+                </div>
+
+                <div className="documentation-metadata">
+                  <div className="documentation-meta-card">
+                    <span>SUMMARY</span>
+                    <p>
+                      {selected.summary || 'No summary provided.'}
+                    </p>
+                  </div>
+
+                  <div className="documentation-meta-card">
+                    <span>COMMIT ID</span>
+                    <p className="documentation-commit-value">
+                      {selected.commitId || 'Not provided'}
+                    </p>
+                  </div>
+
+                  <div className="documentation-meta-card">
+                    <span>LAST UPDATED</span>
+                    <p>
+                      {formatDate(
+                        selected.updatedAt || selected.createdAt
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {selected.repositoryUrl && (
+                  <div className="documentation-repository">
+                    <div>
+                      <span>CONNECTED REPOSITORY</span>
+                      <p>View the source project on GitHub.</p>
+                    </div>
+
+                    <a
+                      href={selected.repositoryUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open GitHub →
+                    </a>
+                  </div>
+                )}
+
+                <div className="documentation-divider" />
+
+                <div className="documentation-markdown">
+                  {selected.content ? (
+                    <ReactMarkdown
+                      components={{
+                        pre({ children }) {
+                          return (
+                            <pre className="documentation-code">
+                              {children}
+                            </pre>
+                          );
+                        },
+                        code({
+                          children,
+                          className,
+                          ...props
+                        }) {
+                          const isBlock = Boolean(className);
+
+                          return (
+                            <code
+                              className={
+                                isBlock
+                                  ? 'documentation-code-text'
+                                  : 'documentation-inline-code'
+                              }
+                              {...props}
+                            >
+                              {children}
+                            </code>
+                          );
+                        },
+                      }}
+                    >
+                      {selected.content}
+                    </ReactMarkdown>
+                  ) : (
+                    <div className="documentation-message">
+                      <h3>Documentation content is missing</h3>
+                      <p>
+                        This record has summary information, but its
+                        content field is empty. The backend must save
+                        the generated documentation sections to display
+                        them here.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="documentation-message">
+                Select a history record to view its documentation.
+              </div>
+            )}
+          </article>
+        </div>
       )}
     </section>
   );
