@@ -8,26 +8,45 @@ async function generateDocumentation(diff) {
     throw new Error("A Git diff is required.");
   }
 
-  const response = await fetch(
-    `${AI_ENGINE_URL}/api/generate-documentation`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ diff })
-    }
-  );
+  const controller = new AbortController();
 
-  const result = await response.json();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 30000);
 
-  if (!response.ok || !result.success) {
-    throw new Error(
-      result.error || "Documentation generation failed."
+  try {
+    const response = await fetch(
+      `${AI_ENGINE_URL}/api/generate-documentation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ diff }),
+        signal: controller.signal
+      }
     );
-  }
 
-  return result.documentation;
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(
+        result.error || "Documentation generation failed."
+      );
+    }
+
+    return result.documentation;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(
+        "AI documentation service timed out after 30 seconds."
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 module.exports = { generateDocumentation };
