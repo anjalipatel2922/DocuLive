@@ -78,3 +78,4 @@ Return only the documentation in Markdown.`;
 };
 
 module.exports = { generateDocumentation };
+// Test: Verify live GitHub-to-AI documentation workflow.
