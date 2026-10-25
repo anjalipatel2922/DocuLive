@@ -63,19 +63,22 @@ async function getCodeChanges(repository, before, after) {
   const response = await fetch(url, { headers });
 
   if (!response.ok) {
+    const details = await response.text();
     throw new Error(
-      `GitHub compare API returned ${response.status}`
+      `GitHub compare API returned ${response.status}: ${details}`
     );
   }
 
   const data = await response.json();
 
-  // Ignore generated files that can overwhelm the AI prompt
   const ignoredFiles = [
     'package-lock.json',
     'yarn.lock',
     'pnpm-lock.yaml'
   ];
+
+  const isSource = filename =>
+    /\.(js|jsx|ts|tsx|py|java|html|css|json|md)$/i.test(filename);
 
   const files = (data.files || [])
     .filter(file => file.patch)
@@ -83,15 +86,11 @@ async function getCodeChanges(repository, before, after) {
       file =>
         !ignoredFiles.some(name => file.filename.endsWith(name))
     )
-    .sort((a, b) => {
-      const isSource = filename =>
-        /\.(js|jsx|ts|tsx|py|java|html|css|json|md)$/i.test(filename);
-
-      return (
+    .sort(
+      (a, b) =>
         Number(isSource(b.filename)) -
         Number(isSource(a.filename))
-      );
-    });
+    );
 
   if (files.length === 0) {
     throw new Error(
@@ -120,11 +119,16 @@ async function processPush(payload) {
   const latestCommit = payload.head_commit;
 
   if (!repository || !latestCommit?.id) {
-    console.log('Repository or head commit missing; skipping documentation');
+    console.log(
+      'Repository or head commit missing; skipping documentation'
+    );
     return;
   }
 
-  // Avoid generating duplicate documentation
+  console.log(
+    `Starting documentation processing for commit ${latestCommit.id}`
+  );
+
   const existing = await Documentation.findOne({
     commitId: latestCommit.id
   });
@@ -142,12 +146,20 @@ async function processPush(payload) {
     payload.after
   );
 
+  console.log(
+    `Source changes retrieved for commit ${latestCommit.id}`
+  );
+
   const content = await generateDocumentation({
     repositoryUrl: repository.html_url,
     commitMessage: latestCommit.message || '',
     author: latestCommit.author?.name || '',
     codeChanges
   });
+
+  if (!content || !content.trim()) {
+    throw new Error('AI returned empty documentation');
+  }
 
   await Documentation.create({
     projectName: repository.name || 'DocuLive',
@@ -189,7 +201,7 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 
     const repositoryUrl = payload.repository.html_url;
 
-    // Save metadata for every commit in the push
+    // Save metadata for each commit in the push
     for (const commit of payload.commits) {
       if (typeof commit.id !== 'string' || !commit.id) {
         continue;
@@ -212,21 +224,27 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
       );
     }
 
-    // Respond to GitHub before AI generation starts
+    // Acknowledge GitHub before AI processing
     res.status(200).json({
       message: 'GitHub push received; documentation processing started',
       commitsReceived: payload.commits.length
     });
 
-    // Generate documentation in the background
-    processPush(payload).catch(error => {
-      console.error(
-        'AI documentation generation failed:',
-        error.message
-      );
-    });
+    // Log both successful completion and detailed failures
+    processPush(payload)
+      .then(() => {
+        console.log(
+          'Background documentation processing finished.'
+        );
+      })
+      .catch(error => {
+        console.error(
+          'AI documentation generation failed:',
+          error.stack || error.message
+        );
+      });
   } catch (error) {
-    console.error('GitHub webhook error:', error.message);
+    console.error('GitHub webhook error:', error.stack || error.message);
 
     if (!res.headersSent) {
       return res.status(500).json({
