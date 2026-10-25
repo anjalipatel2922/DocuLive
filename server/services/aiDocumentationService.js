@@ -6,33 +6,49 @@ const generateDocumentation = async ({
   codeChanges
 }) => {
   if (!codeChanges || !codeChanges.trim()) {
-    return 'No code changes were provided for documentation.';
+    throw new Error('No code changes were provided for documentation');
   }
 
   const accessToken = process.env.OLLAMA_PROXY_TOKEN;
 
   if (!process.env.OLLAMA_URL || !accessToken) {
-    throw new Error('OLLAMA_URL or OLLAMA_PROXY_TOKEN is not configured');
+    throw new Error(
+      'OLLAMA_URL or OLLAMA_PROXY_TOKEN is not configured'
+    );
   }
 
-  const prompt = `You are a software documentation assistant.
-Generate clear Markdown documentation from the supplied code changes.
+  const prompt = `You are DocuLive, a precise software documentation assistant.
 
-Include:
-1. Summary of the changes
-2. Files or features affected
-3. Important implementation details
-4. API or configuration changes, if any
-5. Testing notes or limitations
-
-Do not invent details not supported by the code changes.
+Generate useful Markdown documentation based ONLY on the supplied code changes.
 
 Repository: ${repositoryUrl}
 Commit message: ${commitMessage || 'Not provided'}
 Author: ${author || 'Not provided'}
 
-Code changes:
-${codeChanges}`;
+CODE CHANGES:
+${codeChanges}
+
+Follow these rules:
+1. Start with the heading "# Documentation Changes".
+2. Explain what actually changed and why, using the commit message only as context.
+3. Identify the modified files and describe their specific changes.
+4. Explain relevant functions, components, routes, APIs, and data flow when visible in the diff.
+5. Mention configuration or dependency changes only when present in the supplied changes.
+6. Include testing information only when supported by the changes. Do not claim tests passed unless the diff proves it.
+7. If a change is unclear, explicitly say so rather than guessing.
+8. Do not output a generic package.json template.
+9. Do not reproduce the entire source code or invent features.
+10. Use concise, specific Markdown with these sections:
+
+## Summary
+## Files Changed
+## Implementation Details
+## API and Configuration Changes
+## Testing and Limitations
+
+Omit a section if it is genuinely not applicable. Do not fill sections with guesses.
+
+Return only the documentation in Markdown.`;
 
   const ollamaUrl = process.env.OLLAMA_URL.replace(/\/+$/, '');
 
@@ -40,7 +56,7 @@ ${codeChanges}`;
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`
+      Authorization: `Bearer ${accessToken}`
     },
     body: JSON.stringify({
       prompt,
@@ -54,13 +70,11 @@ ${codeChanges}`;
 
   const data = await response.json();
 
-  if (!data.response) {
+  if (!data.response || !data.response.trim()) {
     throw new Error('Ollama returned an empty response');
   }
 
-  return data.response;
+  return data.response.trim();
 };
 
 module.exports = { generateDocumentation };
-
-// Test: Verify AI documentation generation after a real code change.
