@@ -1,78 +1,166 @@
 
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
+const crypto = require("crypto");
 const { Octokit } = require("@octokit/rest");
 const express = require("express");
 const cors = require("cors");
 const { generateDocumentation } = require("./documentationClient");
+const connectDB = require("./config/db");
+const Review = require("./models/Review");
+const Documentation = require("./models/Documentation");
 
 const app = express();
+const PORT = process.env.PORT || 5000;
+
 app.use(cors());
-app.use(express.json());
 
-const PORT = 5000;
-
-// ==================================================
-// TEMPORARY IN-MEMORY STORAGE
-// Member 4 can replace this with MongoDB later.
-// ==================================================
-
-let reviews = [];
-let documentationHistory = [];
-
-// ==================================================
-// GITHUB API CONNECTION
-// ==================================================
+app.use(
+    express.json({
+        verify: (req, res, buffer) => {
+            if (req.originalUrl.startsWith("/webhook")) {
+                req.rawBody = Buffer.from(buffer);
+            }
+        }
+    })
+);
 
 const octokit = new Octokit({
-    auth: process.env.GITHUB_TOKEN
+    auth: process.env.GITHUB_TOKEN || undefined
 });
 
-// ==================================================
-// HOME ROUTE
-// ==================================================
+function getRepositoryUrl(repository) {
+    if (repository && typeof repository === "object" && repository.html_url) {
+        return repository.html_url;
+    }
 
+    if (typeof repository === "string" && repository.includes("/")) {
+        return `https://github.com/${repository}`;
+    }
+
+    return "";
+}
+
+function formatReview(record) {
+    const item = { ...record };
+
+    if (item._id) {
+        item._id = String(item._id);
+        item.id = item._id;
+    }
+
+    return item;
+}
+
+function formatDocumentation(record) {
+    const repository = record.repository || "";
+    const rawContent = record.documentation;
+
+    const content =
+        typeof rawContent === "string"
+            ? rawContent
+            : JSON.stringify(rawContent ?? "", null, 2);
+
+    return {
+        _id: record._id ? String(record._id) : String(record.id || ""),
+        id: record._id ? String(record._id) : String(record.id || ""),
+        projectName: repository ? repository.split("/").pop() : "DocuLive",
+        repository,
+        repositoryUrl: getRepositoryUrl(repository),
+        branch: record.branch || "",
+        commitId: record.commitSha || "",
+        commitSha: record.commitSha || "",
+        commitMessage: record.commitMessage || "",
+        author: record.author || "",
+        file: record.file || "",
+        status: record.status || "",
+        additions: record.additions || 0,
+        deletions: record.deletions || 0,
+        summary: record.summary || "",
+        content,
+        documentation: rawContent,
+        createdAt: record.createdAt || new Date().toISOString(),
+        updatedAt: record.updatedAt || record.createdAt || new Date().toISOString()
+    };
+}
+
+function verifyGitHubSignature(req) {
+    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+    const signature = req.get("x-hub-signature-256");
+
+    if (!secret || !signature || !req.rawBody) {
+        return false;
+    }
+
+    const expected =
+        "sha256=" +
+        crypto
+            .createHmac("sha256", secret)
+            .update(req.rawBody)
+            .digest("hex");
+
+    const expectedBuffer = Buffer.from(expected);
+    const signatureBuffer = Buffer.from(signature);
+
+    return (
+        expectedBuffer.length === signatureBuffer.length &&
+        crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+    );
+}
+
+// HOME ROUTE
 app.get("/", (req, res) => {
     res.send("AI Code Review Backend is running successfully!");
 });
 
-// ==================================================
-// GET AI REVIEWS
-// ==================================================
+// GET REVIEWS FROM MONGODB
+app.get("/api/reviews", async (req, res) => {
+    try {
+        const records = await Review.find()
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
 
-app.get("/api/reviews", (req, res) => {
-    res.status(200).json({
-        success: true,
-        count: reviews.length,
-        reviews
-    });
+        const reviews = records.map(formatReview);
+
+        res.status(200).json({
+            success: true,
+            count: reviews.length,
+            reviews
+        });
+    } catch (error) {
+        console.error("Failed to fetch reviews:", error.message);
+
+        res.status(500).json({
+            success: false,
+            error: "Failed to fetch reviews."
+        });
+    }
 });
 
+// MANUAL AI CODE REVIEW
 app.post("/api/reviews", async (req, res) => {
     try {
-        const { code } = req.body;
+        const { code } = req.body || {};
 
-        if (!code || typeof code !== "string" || !code.trim()) {
+        if (typeof code !== "string" || !code.trim()) {
             return res.status(400).json({
                 success: false,
                 error: "Please provide code to review."
             });
         }
 
-        const reviewData = await reviewCode(
-            code,
-            {
-                repository: "Manual Review",
-                branch: "manual",
-                commitSha: "manual-" + Date.now(),
-                commitMessage: "Manual code review",
-                author: "User",
-                file: "submitted-code",
-                status: "modified",
-                additions: 0,
-                deletions: 0
-            }
-        );
+        const reviewData = await reviewCode(code, {
+            repository: "Manual Review",
+            branch: "manual",
+            commitSha: `manual-${Date.now()}`,
+            commitMessage: "Manual code review",
+            author: "User",
+            file: "submitted-code",
+            status: "modified",
+            additions: 0,
+            deletions: 0
+        });
 
         if (!reviewData) {
             return res.status(502).json({
@@ -81,66 +169,105 @@ app.post("/api/reviews", async (req, res) => {
             });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             review: reviewData
         });
     } catch (error) {
         console.error("Manual review failed:", error.message);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             error: "Failed to review code."
         });
     }
 });
 
+// GET DOCUMENTATION
+// Return an array because the frontend expects multiple records.
+app.get("/api/documentation", async (req, res) => {
+    try {
+        const records = await Documentation.find()
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
 
-// ==================================================
-// GET LATEST DOCUMENTATION
-// ==================================================
+        const documentation = records.map(formatDocumentation);
 
-app.get("/api/documentation", (req, res) => {
-    res.status(200).json({
-        success: true,
-        documentation: documentationHistory[0] || null
-    });
+        return res.status(200).json({
+            success: true,
+            count: documentation.length,
+            documentation
+        });
+    } catch (error) {
+        console.error("Failed to fetch documentation:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            error: "Failed to fetch documentation."
+        });
+    }
 });
 
-// ==================================================
 // GET DOCUMENTATION HISTORY
-// ==================================================
+app.get("/api/documentation/history", async (req, res) => {
+    try {
+        const records = await Documentation.find()
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
 
-app.get("/api/documentation/history", (req, res) => {
-    res.status(200).json({
-        success: true,
-        count: documentationHistory.length,
-        documentation: documentationHistory
-    });
+        const documentation = records.map(formatDocumentation);
+
+        return res.status(200).json({
+            success: true,
+            count: documentation.length,
+            documentation
+        });
+    } catch (error) {
+        console.error("Failed to fetch documentation history:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            error: "Failed to fetch documentation history."
+        });
+    }
 });
 
-// ==================================================
 // GET LATEST REPOSITORY DETAILS
-// ==================================================
+app.get("/api/repository", async (req, res) => {
+    try {
+        const latest = await Documentation.findOne()
+            .sort({ createdAt: -1 })
+            .lean();
 
-app.get("/api/repository", (req, res) => {
-    const latest = documentationHistory[0];
+        return res.status(200).json({
+            success: true,
+            repository: latest?.repository || null,
+            repositoryUrl: latest
+                ? getRepositoryUrl(latest.repository)
+                : null,
+            branch: latest?.branch || null,
+            commitSha: latest?.commitSha || null
+        });
+    } catch (error) {
+        console.error("Failed to fetch repository details:", error.message);
 
-    res.status(200).json({
-        success: true,
-        repository: latest?.repository || null,
-        branch: latest?.branch || null,
-        commitSha: latest?.commitSha || null
-    });
+        return res.status(500).json({
+            success: false,
+            error: "Failed to fetch repository details."
+        });
+    }
 });
 
-// ==================================================
-// OPENROUTER AI CODE REVIEW
-// ==================================================
-
+// AI CODE REVIEW AND MONGODB STORAGE
 async function reviewCode(codeDiff, commitInfo) {
     try {
         console.log("\n========== AI CODE REVIEW ==========");
+
+        if (!process.env.OPENROUTER_API_KEY) {
+            throw new Error("OPENROUTER_API_KEY is missing from server/.env");
+        }
 
         const response = await fetch(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -148,8 +275,7 @@ async function reviewCode(codeDiff, commitInfo) {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    "Authorization":
-                        `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
                     "HTTP-Referer": "http://localhost:5000",
                     "X-Title": "DocuLive AI Code Review"
                 },
@@ -195,39 +321,37 @@ SUMMARY:
 
         if (!response.ok) {
             throw new Error(
-                data.error?.message ||
-                `OpenRouter HTTP ${response.status}`
+                data.error?.message || `OpenRouter HTTP ${response.status}`
             );
         }
 
         const review =
-            data.choices?.[0]?.message?.content ||
-            "No review returned.";
+            data.choices?.[0]?.message?.content || "No review returned.";
 
-        const reviewData = {
-            id: Date.now(),
-            ...commitInfo,
+        const saved = await Review.create({
+            repository: commitInfo.repository || "Manual Review",
+            branch: commitInfo.branch || "",
+            commitSha: commitInfo.commitSha || "",
+            commitMessage: commitInfo.commitMessage || "",
+            author: commitInfo.author || "",
+            file: commitInfo.file || "",
+            status: commitInfo.status || "completed",
+            additions: commitInfo.additions || 0,
+            deletions: commitInfo.deletions || 0,
             review,
-            createdAt: new Date().toISOString()
-        };
+            createdAt: new Date()
+        });
 
-        reviews.unshift(reviewData);
-        reviews = reviews.slice(0, 20);
+        console.log("AI review saved to MongoDB.");
 
-        console.log("AI review saved successfully.");
-        console.log(review);
-
-        return reviewData;
+        return formatReview(saved.toObject());
     } catch (error) {
-        console.error("OpenRouter API error:", error.message);
+        console.error("Review or storage failed:", error.message);
         return null;
     }
 }
 
-// ==================================================
-// GENERATE AND STORE DOCUMENTATION
-// ==================================================
-
+// AI DOCUMENTATION AND MONGODB STORAGE
 async function saveDocumentation(codeDiff, commitInfo) {
     try {
         console.log("\n========== AI DOCUMENTATION ==========");
@@ -239,35 +363,34 @@ async function saveDocumentation(codeDiff, commitInfo) {
         }
 
         const documentationData = {
-            id: `${commitInfo.commitSha}-${commitInfo.file}`,
-            repository: commitInfo.repository,
-            branch: commitInfo.branch,
-            commitSha: commitInfo.commitSha,
-            commitMessage: commitInfo.commitMessage,
-            author: commitInfo.author,
-            file: commitInfo.file,
-            status: commitInfo.status,
-            additions: commitInfo.additions,
-            deletions: commitInfo.deletions,
-            summary: result.summary || "",
-            documentation: result.documentation || "",
-            createdAt: new Date().toISOString()
+            repository: commitInfo.repository || "Unknown Repository",
+            branch: commitInfo.branch || "",
+            commitSha: commitInfo.commitSha || "",
+            commitMessage: commitInfo.commitMessage || "",
+            author: commitInfo.author || "",
+            file: commitInfo.file || "",
+            status: commitInfo.status || "completed",
+            additions: commitInfo.additions || 0,
+            deletions: commitInfo.deletions || 0,
+            summary:
+                typeof result === "object" && result !== null
+                    ? result.summary || ""
+                    : "",
+            documentation:
+                typeof result === "object" && result !== null
+                    ? result.documentation ?? result
+                    : result,
+            createdAt: new Date()
         };
 
-        // Keep newest documentation first.
-        documentationHistory.unshift(documentationData);
+        const saved = await Documentation.create(documentationData);
 
-        // Temporary limit until MongoDB integration.
-        documentationHistory = documentationHistory.slice(0, 100);
+        console.log("Documentation saved to MongoDB.");
 
-        console.log("Documentation saved successfully.");
-        console.log("Summary:", documentationData.summary);
-        console.log("Documentation:", documentationData.documentation);
-
-        return documentationData;
+        return formatDocumentation(saved.toObject());
     } catch (error) {
         console.error(
-            "Documentation generation failed:",
+            "Documentation generation/storage failed:",
             error.message
         );
 
@@ -275,19 +398,24 @@ async function saveDocumentation(codeDiff, commitInfo) {
     }
 }
 
-// ==================================================
-// PROCESS GITHUB PUSH
-// ==================================================
-
+// PROCESS GITHUB PUSH EVENTS
 async function processPush(payload) {
     const repository = payload.repository?.full_name;
-
     const branch = payload.ref?.replace("refs/heads/", "");
     const commits = payload.commits || [];
 
     console.log("\n========== PROCESSING PUSH ==========");
     console.log("Repository:", repository);
     console.log("Branch:", branch);
+
+    if (
+        !repository ||
+        !payload.repository?.owner?.login ||
+        !payload.repository?.name
+    ) {
+        console.error("Push payload is missing repository details.");
+        return;
+    }
 
     for (const commit of commits) {
         try {
@@ -306,10 +434,7 @@ async function processPush(payload) {
                 console.log("Changed file:", file.filename);
 
                 if (!file.patch) {
-                    console.log(
-                        "No text patch available:",
-                        file.filename
-                    );
+                    console.log("No text patch available:", file.filename);
                     continue;
                 }
 
@@ -325,15 +450,12 @@ ${file.patch}`;
                     branch,
                     commitSha: commit.id,
                     commitMessage: commit.message,
-                    author: commit.author?.name,
+                    author: commit.author?.name || "",
                     file: file.filename,
                     status: file.status,
                     additions: file.additions,
                     deletions: file.deletions
                 };
-
-                // Run both AI features independently.
-                // One failure should not prevent the other.
 
                 await Promise.allSettled([
                     reviewCode(codeDiff, commitInfo),
@@ -352,12 +474,19 @@ ${file.patch}`;
     console.log("\n========== PUSH PROCESSING COMPLETE ==========\n");
 }
 
-// ==================================================
-// GITHUB WEBHOOK
-// ==================================================
-
+// GITHUB WEBHOOK WITH SIGNATURE VERIFICATION
 app.post("/webhook", (req, res) => {
-    const event = req.headers["x-github-event"];
+    if (!process.env.GITHUB_WEBHOOK_SECRET) {
+        return res.status(500).send(
+            "GITHUB_WEBHOOK_SECRET is not configured."
+        );
+    }
+
+    if (!verifyGitHubSignature(req)) {
+        return res.status(401).send("Invalid GitHub webhook signature.");
+    }
+
+    const event = req.get("x-github-event");
     const payload = req.body;
 
     console.log("GitHub event:", event);
@@ -367,29 +496,45 @@ app.post("/webhook", (req, res) => {
     }
 
     if (event === "push") {
-        // Acknowledge the event before AI processing.
-        res.status(200).send("Webhook received successfully!");
+        res.status(202).send("Webhook received; processing started.");
 
         processPush(payload).catch((error) => {
-            console.error(
-                "Background processing failed:",
-                error.message
-            );
+            console.error("Background processing failed:", error.message);
         });
 
         return;
     }
 
-    return res.status(200).send("Webhook received successfully!");
+    return res.status(200).send(
+        `Event '${event || "unknown"}' ignored.`
+    );
 });
 
-// ==================================================
-// START SERVER
-// ==================================================
+app.use((err, req, res, next) => {
+    console.error("Unhandled server error:", err.message);
 
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+    if (res.headersSent) {
+        return next(err);
+    }
+
+    return res.status(500).json({
+        success: false,
+        error: "Internal server error."
+    });
 });
 
-// Webhook integration test
+// CONNECT TO MONGODB BEFORE STARTING THE SERVER
+async function startServer() {
+    try {
+        await connectDB();
 
+        app.listen(PORT, () => {
+            console.log(`Server running at http://localhost:${PORT}`);
+        });
+    } catch (error) {
+        console.error("Server startup failed:", error.message);
+        process.exit(1);
+    }
+}
+
+startServer();

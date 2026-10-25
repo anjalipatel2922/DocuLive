@@ -62,11 +62,38 @@ async function generateDocumentation(diff) {
     );
   }
 
-  const aiResponse = data.choices?.[0]?.message?.content;
+ const choice = data.choices?.[0];
+const message = choice?.message;
+let aiResponse = message?.content;
 
-  if (!aiResponse) {
-    throw new Error("OpenRouter returned an empty response.");
-  }
+// Handle responses where content is returned as an array.
+if (Array.isArray(aiResponse)) {
+  aiResponse = aiResponse
+    .map((part) =>
+      typeof part === "string" ? part : part?.text || ""
+    )
+    .join("\n");
+}
+
+if (typeof aiResponse !== "string" || !aiResponse.trim()) {
+  console.error("OpenRouter response diagnostics:", {
+    status: response.status,
+    error: data.error,
+    model: choice?.model,
+    provider: choice?.provider,
+    finishReason: choice?.finish_reason,
+    refusal: message?.refusal,
+    messageContent: message?.content
+  });
+
+  throw new Error(
+    `OpenRouter returned no usable text. Finish reason: ${
+      choice?.finish_reason || "unknown"
+    }`
+  );
+}
+
+aiResponse = aiResponse.trim();
 
   console.log("OpenRouter documentation response received.");
 
