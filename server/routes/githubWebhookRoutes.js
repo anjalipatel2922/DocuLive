@@ -41,9 +41,9 @@ function verifyGitHubSignature(req, res, next) {
   next();
 }
 
-// Fetch the code changes from GitHub
+// Fetch meaningful source-code changes from GitHub
 async function getCodeChanges(repository, before, after) {
-  if (!repository.full_name || !after) {
+  if (!repository?.full_name || !before || !after) {
     throw new Error('Repository name or commit SHA is missing');
   }
 
@@ -56,7 +56,6 @@ async function getCodeChanges(repository, before, after) {
     'User-Agent': 'DocuLive'
   };
 
-  // Optional: useful if the repository is private
   if (process.env.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   }
@@ -64,25 +63,53 @@ async function getCodeChanges(repository, before, after) {
   const response = await fetch(url, { headers });
 
   if (!response.ok) {
-    throw new Error(`GitHub compare API returned ${response.status}`);
+    throw new Error(
+      `GitHub compare API returned ${response.status}`
+    );
   }
 
   const data = await response.json();
 
-  const files = (data.files || []).map(file => {
-    return [
-      `File: ${file.filename}`,
-      `Status: ${file.status}`,
-      `Changes: ${file.changes}`,
-      `Patch:\n${file.patch || 'Patch unavailable'}`
-    ].join('\n');
-  });
+  // Ignore generated files that can overwhelm the AI prompt
+  const ignoredFiles = [
+    'package-lock.json',
+    'yarn.lock',
+    'pnpm-lock.yaml'
+  ];
 
-  const changes = files.join('\n\n').slice(0, 30000);
+  const files = (data.files || [])
+    .filter(file => file.patch)
+    .filter(
+      file =>
+        !ignoredFiles.some(name => file.filename.endsWith(name))
+    )
+    .sort((a, b) => {
+      const isSource = filename =>
+        /\.(js|jsx|ts|tsx|py|java|html|css|json|md)$/i.test(filename);
 
-  if (!changes) {
-    throw new Error('GitHub returned no file diffs to document');
+      return (
+        Number(isSource(b.filename)) -
+        Number(isSource(a.filename))
+      );
+    });
+
+  if (files.length === 0) {
+    throw new Error(
+      'No usable source-code diffs found after filtering generated files'
+    );
   }
+
+  const changes = files
+    .map(file =>
+      [
+        `File: ${file.filename}`,
+        `Status: ${file.status}`,
+        `Changes: ${file.changes}`,
+        `Patch:\n${file.patch}`
+      ].join('\n')
+    )
+    .join('\n\n')
+    .slice(0, 30000);
 
   return changes;
 }
@@ -90,21 +117,22 @@ async function getCodeChanges(repository, before, after) {
 // Generate and save documentation for a push
 async function processPush(payload) {
   const repository = payload.repository;
-  const commits = payload.commits || [];
   const latestCommit = payload.head_commit;
 
-  if (!latestCommit?.id) {
-    console.log('No head commit found; skipping AI documentation');
+  if (!repository || !latestCommit?.id) {
+    console.log('Repository or head commit missing; skipping documentation');
     return;
   }
 
-  // Avoid generating the same documentation repeatedly
+  // Avoid generating duplicate documentation
   const existing = await Documentation.findOne({
     commitId: latestCommit.id
   });
 
   if (existing) {
-    console.log('Documentation already exists for this commit');
+    console.log(
+      `Documentation already exists for commit ${latestCommit.id}`
+    );
     return;
   }
 
@@ -150,6 +178,7 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 
     if (
       !payload.repository ||
+      typeof payload.repository.full_name !== 'string' ||
       typeof payload.repository.html_url !== 'string' ||
       !Array.isArray(payload.commits)
     ) {
@@ -160,6 +189,7 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 
     const repositoryUrl = payload.repository.html_url;
 
+    // Save metadata for every commit in the push
     for (const commit of payload.commits) {
       if (typeof commit.id !== 'string' || !commit.id) {
         continue;
@@ -182,16 +212,19 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
       );
     }
 
-    // Respond to GitHub before waiting for the AI request
+    // Respond to GitHub before AI generation starts
     res.status(200).json({
       message: 'GitHub push received; documentation processing started',
-      commitsProcessed: payload.commits.length
+      commitsReceived: payload.commits.length
     });
 
-    // Run AI documentation generation in the background
-   processPush(payload).catch(error => {
-  console.error('AI documentation generation failed:', error);
-});
+    // Generate documentation in the background
+    processPush(payload).catch(error => {
+      console.error(
+        'AI documentation generation failed:',
+        error.message
+      );
+    });
   } catch (error) {
     console.error('GitHub webhook error:', error.message);
 
@@ -204,5 +237,3 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 });
 
 module.exports = router;
-
-// Test: Verify the GitHub webhook and AI documentation workflow.
