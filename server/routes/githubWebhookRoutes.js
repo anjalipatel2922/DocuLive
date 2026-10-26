@@ -43,7 +43,7 @@ function verifyGitHubSignature(req, res, next) {
   next();
 }
 
-// Fetch application source-code changes from GitHub
+// Fetch application source-code changes from GitHub and prepare relevant diffs for AI documentation/ Fetch application source-code changes from GitHub
 async function getCodeChanges(repository, before, after) {
   if (!repository?.full_name || !before || !after) {
     throw new Error('Repository name or commit SHA is missing');
