@@ -6,7 +6,9 @@ const router = express.Router();
 
 const GitHubCommit = require('../models/GitHubCommit');
 const Documentation = require('../models/Documentation');
-const { generateDocumentation } = require('../services/aiDocumentationService');
+const {
+  generateDocumentation
+} = require('../services/aiDocumentationService');
 
 // Verify GitHub webhook signature
 function verifyGitHubSignature(req, res, next) {
@@ -41,7 +43,7 @@ function verifyGitHubSignature(req, res, next) {
   next();
 }
 
-// Fetch meaningful source-code changes from GitHub
+// Fetch application source-code changes from GitHub
 async function getCodeChanges(repository, before, after) {
   if (!repository?.full_name || !before || !after) {
     throw new Error('Repository name or commit SHA is missing');
@@ -64,6 +66,7 @@ async function getCodeChanges(repository, before, after) {
 
   if (!response.ok) {
     const details = await response.text();
+
     throw new Error(
       `GitHub compare API returned ${response.status}: ${details}`
     );
@@ -71,46 +74,62 @@ async function getCodeChanges(repository, before, after) {
 
   const data = await response.json();
 
+  // Exclude generated files, dependencies and configuration-only files.
   const ignoredFiles = [
     'package-lock.json',
     'yarn.lock',
-    'pnpm-lock.yaml'
+    'pnpm-lock.yaml',
+    'package.json'
   ];
 
   const isSource = filename =>
-    /\.(js|jsx|ts|tsx|py|java|html|css|json|md)$/i.test(filename);
+    /\.(js|jsx|ts|tsx|py|java|html|css)$/i.test(filename);
 
   const files = (data.files || [])
-    .filter(file => file.patch)
+    .filter(file => file.patch && isSource(file.filename))
     .filter(
       file =>
         !ignoredFiles.some(name => file.filename.endsWith(name))
-    )
-    .sort(
-      (a, b) =>
-        Number(isSource(b.filename)) -
-        Number(isSource(a.filename))
     );
 
   if (files.length === 0) {
     throw new Error(
-      'No usable source-code diffs found after filtering generated files'
+      'No usable application source-code diffs found'
     );
   }
 
-  const changes = files
-    .map(file =>
-      [
-        `File: ${file.filename}`,
-        `Status: ${file.status}`,
-        `Changes: ${file.changes}`,
-        `Patch:\n${file.patch}`
-      ].join('\n')
-    )
-    .join('\n\n')
-    .slice(0, 30000);
+  // Prioritize application source files while preserving GitHub order
+  // among files of the same type.
+  const maxLength = 30000;
+  const sections = [];
+  let totalLength = 0;
 
-  return changes;
+  for (const file of files) {
+    const section = [
+      `File: ${file.filename}`,
+      `Status: ${file.status}`,
+      `Changes: ${file.changes}`,
+      `Patch:\n${file.patch}`
+    ].join('\n');
+
+    const separator = sections.length ? '\n\n' : '';
+    const remaining = maxLength - totalLength - separator.length;
+
+    if (remaining <= 0) break;
+
+    if (section.length > remaining) {
+      sections.push(
+        section.slice(0, remaining) +
+          '\n[Diff truncated because the input limit was reached.]'
+      );
+      break;
+    }
+
+    sections.push(section);
+    totalLength += separator.length + section.length;
+  }
+
+  return sections.join('\n\n');
 }
 
 // Generate and save documentation for a push
@@ -147,7 +166,8 @@ async function processPush(payload) {
   );
 
   console.log(
-    `Source changes retrieved for commit ${latestCommit.id}`
+    `Source changes retrieved for commit ${latestCommit.id}; ` +
+    `${codeChanges.length} characters sent for documentation`
   );
 
   const content = await generateDocumentation({
@@ -226,11 +246,12 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 
     // Acknowledge GitHub before AI processing
     res.status(200).json({
-      message: 'GitHub push received; documentation processing started',
+      message:
+        'GitHub push received; documentation processing started',
       commitsReceived: payload.commits.length
     });
 
-    // Log both successful completion and detailed failures
+    // Run documentation generation in the background
     processPush(payload)
       .then(() => {
         console.log(
@@ -244,7 +265,10 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
         );
       });
   } catch (error) {
-    console.error('GitHub webhook error:', error.stack || error.message);
+    console.error(
+      'GitHub webhook error:',
+      error.stack || error.message
+    );
 
     if (!res.headersSent) {
       return res.status(500).json({
