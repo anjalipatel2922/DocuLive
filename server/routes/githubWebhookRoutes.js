@@ -6,6 +6,7 @@ const router = express.Router();
 
 const GitHubCommit = require('../models/GitHubCommit');
 const Documentation = require('../models/Documentation');
+
 const {
   generateDocumentation
 } = require('../services/aiDocumentationService');
@@ -36,26 +37,45 @@ function verifyGitHubSignature(req, res, next) {
     !crypto.timingSafeEqual(received, expected)
   ) {
     return res.status(401).json({
-      message: 'Invalid webhook signature'
+      message: 'Invalid GitHub webhook signature'
     });
   }
 
   next();
 }
 
-// Fetch application source-code changes from GitHub and prepare relevant diffs for AI documentation/ Fetch application source-code changes from GitHub
+// Fetch source-code changes from GitHub
 async function getCodeChanges(repository, before, after) {
   if (!repository?.full_name || !before || !after) {
-    throw new Error('Repository name or commit SHA is missing');
+    throw new Error(
+      `Missing repository or comparison SHA: repository=${repository?.full_name}, before=${before}, after=${after}`
+    );
+  }
+
+  // GitHub may use an all-zero SHA when a branch is first created.
+  if (/^0+$/.test(before)) {
+    console.log(
+      'Initial branch push detected; GitHub has no previous commit to compare.'
+    );
+    throw new Error(
+      'Initial branch push cannot be compared with a previous commit.'
+    );
   }
 
   const url =
     `https://api.github.com/repos/${repository.full_name}` +
     `/compare/${before}...${after}`;
 
+  console.log('GitHub compare request:', {
+    repository: repository.full_name,
+    before,
+    after
+  });
+
   const headers = {
     Accept: 'application/vnd.github+json',
-    'User-Agent': 'DocuLive'
+    'User-Agent': 'DocuLive',
+    'X-GitHub-Api-Version': '2022-11-28'
   };
 
   if (process.env.GITHUB_TOKEN) {
@@ -68,13 +88,12 @@ async function getCodeChanges(repository, before, after) {
     const details = await response.text();
 
     throw new Error(
-      `GitHub compare API returned ${response.status}: ${details}`
+      `GitHub compare API returned ${response.status} for ${repository.full_name} (${before}...${after}): ${details}`
     );
   }
 
   const data = await response.json();
 
-  // Exclude generated files, dependencies and configuration-only files.
   const ignoredFiles = [
     'package-lock.json',
     'yarn.lock',
@@ -94,12 +113,11 @@ async function getCodeChanges(repository, before, after) {
 
   if (files.length === 0) {
     throw new Error(
-      'No usable application source-code diffs found'
+      `No usable application source-code diffs found for ${after}. ` +
+      'The commit may contain only dependencies, documentation, or other excluded files.'
     );
   }
 
-  // Prioritize application source files while preserving GitHub order
-  // among files of the same type.
   const maxLength = 30000;
   const sections = [];
   let totalLength = 0;
@@ -118,9 +136,14 @@ async function getCodeChanges(repository, before, after) {
     if (remaining <= 0) break;
 
     if (section.length > remaining) {
+      const truncated = section.slice(
+        0,
+        Math.max(0, remaining - 60)
+      );
+
       sections.push(
-        section.slice(0, remaining) +
-          '\n[Diff truncated because the input limit was reached.]'
+        truncated +
+        '\n[Diff truncated because the input limit was reached.]'
       );
       break;
     }
@@ -129,7 +152,13 @@ async function getCodeChanges(repository, before, after) {
     totalLength += separator.length + section.length;
   }
 
-  return sections.join('\n\n');
+  const result = sections.join('\n\n');
+
+  if (!result.trim()) {
+    throw new Error('No source-code changes available for AI documentation.');
+  }
+
+  return result;
 }
 
 // Generate and save documentation for a push
@@ -139,25 +168,34 @@ async function processPush(payload) {
 
   if (!repository || !latestCommit?.id) {
     console.log(
-      'Repository or head commit missing; skipping documentation'
+      'Repository or head commit missing; skipping documentation.'
     );
     return;
   }
 
+  const commitId = latestCommit.id;
+
   console.log(
-    `Starting documentation processing for commit ${latestCommit.id}`
+    `Starting documentation processing for commit ${commitId}`
   );
 
+  // Avoid generating duplicate documentation.
   const existing = await Documentation.findOne({
-    commitId: latestCommit.id
+    commitId
   });
 
   if (existing) {
     console.log(
-      `Documentation already exists for commit ${latestCommit.id}`
+      `Documentation already exists for commit ${commitId}`
     );
     return;
   }
+
+  console.log('GitHub compare values:', {
+    repository: repository.full_name,
+    before: payload.before,
+    after: payload.after
+  });
 
   const codeChanges = await getCodeChanges(
     repository,
@@ -166,8 +204,12 @@ async function processPush(payload) {
   );
 
   console.log(
-    `Source changes retrieved for commit ${latestCommit.id}; ` +
+    `Source changes retrieved for commit ${commitId}; ` +
     `${codeChanges.length} characters sent for documentation`
+  );
+
+  console.log(
+    `Starting AI generation for commit ${commitId}`
   );
 
   const content = await generateDocumentation({
@@ -177,20 +219,29 @@ async function processPush(payload) {
     codeChanges
   });
 
-  if (!content || !content.trim()) {
-    throw new Error('AI returned empty documentation');
+  console.log(
+    'AI response received; content length:',
+    typeof content === 'string' ? content.length : 0
+  );
+
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error(
+      `AI returned empty or invalid documentation for commit ${commitId}`
+    );
   }
 
-  await Documentation.create({
+  // Wait for MongoDB to finish saving before reporting success.
+  const savedDocumentation = await Documentation.create({
     projectName: repository.name || 'DocuLive',
     repositoryUrl: repository.html_url,
     content,
-    commitId: latestCommit.id,
+    commitId,
     summary: latestCommit.message || 'AI-generated documentation'
   });
 
   console.log(
-    `AI documentation saved for commit ${latestCommit.id}`
+    `AI documentation saved for commit ${commitId}; ` +
+    `MongoDB document ID: ${savedDocumentation._id}`
   );
 }
 
@@ -221,7 +272,7 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 
     const repositoryUrl = payload.repository.html_url;
 
-    // Save metadata for each commit in the push
+    // Save metadata for each commit in the push.
     for (const commit of payload.commits) {
       if (typeof commit.id !== 'string' || !commit.id) {
         continue;
@@ -244,14 +295,14 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
       );
     }
 
-    // Acknowledge GitHub before AI processing
+    // Acknowledge GitHub before potentially slow AI processing.
     res.status(200).json({
       message:
         'GitHub push received; documentation processing started',
       commitsReceived: payload.commits.length
     });
 
-    // Run documentation generation in the background
+    // Process in the background and log any failure.
     processPush(payload)
       .then(() => {
         console.log(
@@ -260,7 +311,7 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
       })
       .catch(error => {
         console.error(
-          'AI documentation generation failed:',
+          'Background documentation processing failed:',
           error.stack || error.message
         );
       });
