@@ -55,6 +55,7 @@ Return only the documentation in Markdown.`;
   console.log(
     `AI request starting; URL configured, input size: ${codeChanges.length} characters`
   );
+  console.log(`Commit message: ${commitMessage || 'Not provided'}`);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120000);
