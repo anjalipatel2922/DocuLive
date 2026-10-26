@@ -36,3 +36,5 @@ const startServer = async () => {
 };
 
 startServer();
+
+// Test: verify GitHub webhook to AI documentation workflow.
