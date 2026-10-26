@@ -52,31 +52,56 @@ Return only the documentation in Markdown.`;
 
   const ollamaUrl = process.env.OLLAMA_URL.replace(/\/+$/, '');
 
-  const response = await fetch(`${ollamaUrl}/api/generate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`
-    },
-    body: JSON.stringify({
-      prompt,
-      stream: false
-    })
-  });
+  console.log(
+    `AI request starting; URL configured, input size: ${codeChanges.length} characters`
+  );
 
-  if (!response.ok) {
-    throw new Error(`Ollama proxy failed: ${response.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+
+  try {
+    const response = await fetch(`${ollamaUrl}/api/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        prompt,
+        stream: false
+      }),
+      signal: controller.signal
+    });
+
+    console.log(`Ollama proxy responded with HTTP ${response.status}`);
+
+    if (!response.ok) {
+      const details = await response.text();
+      throw new Error(
+        `Ollama proxy failed: HTTP ${response.status}: ${details.slice(0, 500)}`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!data.response || !data.response.trim()) {
+      throw new Error('Ollama returned an empty response');
+    }
+
+    console.log(
+      `AI documentation generated; output size: ${data.response.length} characters`
+    );
+
+    return data.response.trim();
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('Ollama request timed out after 120 seconds');
+    }
+
+    throw new Error(`AI request failed: ${error.message}`);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = await response.json();
-
-  if (!data.response || !data.response.trim()) {
-    throw new Error('Ollama returned an empty response');
-  }
-
-  return data.response.trim();
 };
 
 module.exports = { generateDocumentation };
-// Test: Verify live GitHub-to-AI documentation workflow.
-// Test: Verify AI documentation generation with a real source diff.
