@@ -69,7 +69,6 @@ async function generateDocumentation(diff) {
   }
 
   console.log("OpenRouter documentation response received.");
-
   return formatDocumentation(aiResponse);
 }
 

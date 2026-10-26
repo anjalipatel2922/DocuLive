@@ -1,4 +1,7 @@
 
+const AI_ENGINE_URL =
+  process.env.AI_ENGINE_URL || "http://localhost:5001";
+
 const generateDocumentation = async ({
   repositoryUrl,
   commitMessage,
@@ -6,61 +9,58 @@ const generateDocumentation = async ({
   codeChanges
 }) => {
   if (!codeChanges || !codeChanges.trim()) {
-    return 'No code changes were provided for documentation.';
+    return "No code changes were provided for documentation.";
   }
 
-  const accessToken = process.env.OLLAMA_PROXY_TOKEN;
+  const context = [
+    `Repository: ${repositoryUrl || "Not provided"}`,
+    `Commit message: ${commitMessage || "Not provided"}`,
+    `Author: ${author || "Not provided"}`,
+    "",
+    "Code changes:",
+    codeChanges
+  ].join("\n");
 
-  if (!process.env.OLLAMA_URL || !accessToken) {
-    throw new Error('OLLAMA_URL or OLLAMA_PROXY_TOKEN is not configured');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(
+      `${AI_ENGINE_URL}/api/generate-documentation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ diff: context }),
+        signal: controller.signal
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(
+        result.error || `AI engine returned HTTP ${response.status}`
+      );
+    }
+
+    if (!result.documentation) {
+      throw new Error("AI engine returned empty documentation.");
+    }
+
+    return typeof result.documentation === "string"
+      ? result.documentation
+      : JSON.stringify(result.documentation, null, 2);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("AI documentation request timed out.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const prompt = `You are a software documentation assistant.
-Generate clear Markdown documentation from the supplied code changes.
-
-Include:
-1. Summary of the changes
-2. Files or features affected
-3. Important implementation details
-4. API or configuration changes, if any
-5. Testing notes or limitations
-
-Do not invent details not supported by the code changes.
-
-Repository: ${repositoryUrl}
-Commit message: ${commitMessage || 'Not provided'}
-Author: ${author || 'Not provided'}
-
-Code changes:
-${codeChanges}`;
-
-  const ollamaUrl = process.env.OLLAMA_URL.replace(/\/+$/, '');
-
-  const response = await fetch(`${ollamaUrl}/api/generate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`
-    },
-    body: JSON.stringify({
-      prompt,
-      stream: false
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Ollama proxy failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-
-  if (!data.response) {
-    throw new Error('Ollama returned an empty response');
-  }
-
-  return data.response;
 };
 
 module.exports = { generateDocumentation };
-
-// Test: Verify AI documentation generation after a real code change.
