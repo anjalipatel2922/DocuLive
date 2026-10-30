@@ -51,3 +51,5 @@ const startServer = async () => {
 };
 
 startServer();
+
+// DocuLive automatically generates documentation
