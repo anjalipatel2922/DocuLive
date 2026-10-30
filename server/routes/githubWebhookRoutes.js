@@ -237,3 +237,5 @@ router.post('/', verifyGitHubSignature, async (req, res) => {
 });
 
 module.exports = router;
+
+// Handles GitHub webhook events when new code is pushed.
