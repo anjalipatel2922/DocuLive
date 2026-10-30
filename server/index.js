@@ -1,5 +1,6 @@
 const dns = require('dns');
 dns.setServers(['8.8.8.8']);
+
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
@@ -11,6 +12,7 @@ const githubWebhookRoutes = require('./routes/githubWebhookRoutes');
 const app = express();
 
 app.use(cors());
+
 app.use(express.json({
   verify: (req, res, buf) => {
     if (req.originalUrl.startsWith('/api/github-webhook')) {
@@ -18,11 +20,24 @@ app.use(express.json({
     }
   }
 }));
+
+// Documentation routes
 app.use('/api/documentation', documentationRoutes);
+
+// GitHub webhook routes
 app.use('/api/github-webhook', githubWebhookRoutes);
 
+// Home route
 app.get('/', (req, res) => {
   res.send('DocuLive backend is running');
+});
+
+// New endpoint for final project testing
+app.get('/api/project-status', (req, res) => {
+  res.json({
+    status: 'DocuLive is working',
+    message: 'Project status endpoint is active'
+  });
 });
 
 const PORT = process.env.PORT || 5000;
